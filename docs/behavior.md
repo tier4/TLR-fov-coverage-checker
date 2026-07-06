@@ -91,3 +91,34 @@ showed the two directions as clearly distinguishable parallel green/red
 lines rather than a blended overlap. If a future map turns out to have
 directions close enough to still be ambiguous at a glance, revisit the
 perpendicular-offset rendering idea then.
+
+## A "covered" (green) point wasn't always fully covered
+
+**Symptom:** asked to confirm that red points mean "this camera can't see
+the relevant light(s) here," which is correct, but surfaced a sharper
+question: does green reliably mean the opposite -- everything relevant is
+seen?
+
+**Root cause:** a single waypoint frequently has more than one candidate
+traffic light (e.g. this intersection's signal and the next one down the
+road, both within `[min_range, max_range]`) -- on the bundled Odaiba map,
+94.7% of the 145,010 evaluated waypoints have more than one candidate
+light, and 48% have a *mixed* outcome (covered for at least one light,
+not for another) at the exact same `(x, y)`. `plot_results` drew `covered`
+(green) last/on top, so a mixed waypoint always rendered as green,
+silently hiding the fact that it was also blind to a second light. The
+numeric stats in `main.py` were never affected by this (each
+`ValidationResult` is counted independently there) -- only the plot could
+mislead.
+
+**Fix:** reversed the draw order in `plot_results` so problems draw last
+(on top): covered (green) first, facing-away (orange) next, out-of-FOV
+(red) last. A mixed waypoint now always shows as a problem rather than
+"fine," which fits the tool's purpose -- finding gaps, not papering over
+them. This changed nothing about the underlying computation or reported
+statistics, only which color wins when multiple results share a pixel.
+The visual difference on the bundled map is large: with the previous
+"green wins" order the plot looked mostly green with scattered red; with
+"problems win" it's now dominated by red, revealing that true full
+coverage (every relevant light seen) at a given point is fairly rare with
+the default 30x17 degree FOV camera.

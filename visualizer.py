@@ -28,6 +28,16 @@ def plot_results(
                 (camera would only see the housing, not a lit lamp)
       - red:    light isn't in the camera's FOV at all
 
+    A single waypoint often has more than one candidate light (e.g. this
+    intersection's signal and the next one down the road both within
+    range) -- 94.7% of waypoints do, on the bundled Odaiba map, and 48% of
+    waypoints have a *mixed* outcome (covered for one light, not for
+    another) at the exact same (x, y). Since those results occupy the same
+    pixel, only the last-drawn one would normally be visible; problems are
+    drawn last (on top of a same-point "covered" result) so a real blind
+    spot is never hidden by an unrelated light that happens to be fine at
+    that spot -- see docs/behavior.md.
+
     `results` only contains waypoints within [camera.min_range, camera.max_range]
     of at least one evaluated traffic light -- mid-block stretches farther than
     that from every light are never evaluated at all, by design (see
@@ -52,11 +62,14 @@ def plot_results(
     facing_away = [r for r in results if r.in_fov and not r.facing_camera]
     out_of_fov = [r for r in results if not r.in_fov]
 
+    # Draw worst-case-per-pixel last (on top): a point with both a covered
+    # result (for one candidate light) and an uncovered one (for another)
+    # must still read as a problem, not get masked by the "fine" result.
     for zorder, (pts, color, label) in enumerate(
         (
-            (out_of_fov, "red", "Out of FOV"),
-            (facing_away, "orange", "In FOV, light facing away"),
             (covered, "green", "Covered"),
+            (facing_away, "orange", "In FOV, light facing away"),
+            (out_of_fov, "red", "Out of FOV"),
         ),
         start=2,
     ):
@@ -82,7 +95,7 @@ def plot_results(
             edgecolors="black",
             linewidths=0.5,
             label="Traffic light",
-            zorder=4,
+            zorder=5,
         )
 
     ax.set_xlabel("Local X [m]")
