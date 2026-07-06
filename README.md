@@ -79,3 +79,7 @@ real files, so they run without any map data present.
   ordering is not consistently chiral across real-world exports). Signals
   without an associated stop line (commonly true for pedestrian signals) get
   `facing_yaw = None` and are never excluded by the facing check.
+
+See `docs/behavior.md` for output quirks that look like bugs but aren't
+(and the one that was: the plot used to omit mid-block road stretches
+outside every light's range, making the map look disconnected).

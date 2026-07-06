@@ -115,7 +115,7 @@ def main() -> None:
         print(f"Lanes with at least one blind waypoint: {len(blind_lanes)} / {len(lanes)}")
 
     plotted_lights = traffic_lights if signal_types is None else [tl for tl in traffic_lights if tl.signal_type in signal_types]
-    plot_results(results, plotted_lights, save_path=str(output_path), show=False)
+    plot_results(results, plotted_lights, lanes=lanes, save_path=str(output_path), show=False)
     print(f"Plot saved to {output_path}")
 
 
