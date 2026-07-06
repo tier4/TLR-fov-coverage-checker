@@ -47,6 +47,74 @@ The printed report breaks coverage down by signal type and by *why* a
 waypoint is uncovered (out of the camera's FOV vs. the signal facing away
 from it), and the saved plot color-codes the same three cases.
 
+## How coverage is computed
+
+For every 1m waypoint on every lane, a camera at `point.z + camera.height`
+looks toward the next waypoint (`cam_yaw`, pitch fixed at 0) and is checked
+against every traffic light within range:
+
+```
+Top-down view, one lane waypoint vs. one traffic light
+=======================================================
+
+                                    stop line midpoint
+                                            :
+                                            : (only used to derive facing_yaw)
+                                            :
+                                facing_yaw  v
+                                     _______*_______   <- traffic light
+                                    /       |       \     (bulb centroid)
+                                   /        |        \
+                          facing_tolerance_deg (each side of facing_yaw)
+                                 /          |          \
+                                .           |           .
+                               .    "legible zone" --   .
+                              .   camera must be in    .
+                                  here for facing_camera
+                                  to be True
+                                            :
+                                            : <-- distance must satisfy
+                                            :     min_range <= d <= max_range
+                                            :     (else never evaluated at all)
+                                    fov_h/2 : fov_h/2
+                                       \    :    /
+                                        \   :   /
+                                         \  :  /
+                                     _____\ : /_____
+                          cam_yaw  <-------o        <- camera (this waypoint,
+                                            |             height = point.z + camera.height)
+                                            |
+                                      next waypoint
+                                (cam_yaw = calc_heading_yaw(point, next_point))
+
+  in_fov         = |angle(cam_yaw, bearing(camera -> light))|    <= fov_h / 2   (fov_v checked the same way, using pitch)
+  facing_camera  = |angle(facing_yaw, bearing(light -> camera))| <= facing_tolerance_deg   (True if facing_yaw is unknown)
+  is_covered     = in_fov AND facing_camera
+```
+
+```
+Side view, same waypoint (vertical FOV / pitch check)
+======================================================
+
+                                traffic light
+                                      *
+                                     /:
+                                    / :
+                                   /  : dz = light.z - camera.z
+                          fov_v/2 /   :
+                                 /    :
+                                /_ _ _:
+                               o ---------------  horizontal_dist
+                          camera (point.z + camera.height)
+
+  target_pitch = atan2(dz, horizontal_dist)   (cam_pitch is fixed at 0.0)
+```
+
+`check_fov_inclusion`, `check_light_facing_camera` and `calc_heading_yaw` in
+`geometry_calculator.py` implement exactly this, and are pure functions --
+see their docstrings and `tests/test_geometry_calculator.py` for the
+boundary cases (e.g. a target exactly on the fov_h/2 edge).
+
 ## Architecture
 
 Each module is independently testable and has a single responsibility:
