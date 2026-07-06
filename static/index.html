@@ -1,0 +1,52 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Traffic Light FOV Coverage Viewer</title>
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <header>
+    <h1>Traffic Light FOV Coverage Viewer</h1>
+    <div id="meta">loading...</div>
+  </header>
+
+  <main>
+    <section id="map-pane">
+      <div class="pane-title">
+        Map &mdash; click a point to inspect it. Drag to pan, scroll to zoom.
+      </div>
+      <canvas id="map-canvas"></canvas>
+      <div id="map-legend" class="legend">
+        <span><i class="dot" style="background:#2ca02c"></i>covered</span>
+        <span><i class="dot" style="background:#ff7f0e"></i>facing away</span>
+        <span><i class="dot" style="background:#d62728"></i>out of FOV</span>
+        <span><i class="star"></i>traffic light</span>
+      </div>
+    </section>
+
+    <section id="detail-pane">
+      <div class="pane-title">Camera view at selected point</div>
+      <canvas id="frame-canvas"></canvas>
+      <div id="point-info">Select a point on the map.</div>
+      <table id="candidate-table">
+        <thead>
+          <tr>
+            <th>light</th>
+            <th>type</th>
+            <th>dist [m]</th>
+            <th>yaw&Delta; [deg]</th>
+            <th>pitch&Delta; [deg]</th>
+            <th>in FOV</th>
+            <th>facing cam</th>
+            <th>covered</th>
+          </tr>
+        </thead>
+        <tbody></tbody>
+      </table>
+    </section>
+  </main>
+
+  <script src="app.js"></script>
+</body>
+</html>

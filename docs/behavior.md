@@ -165,3 +165,32 @@ coverage went from 20.4% to 39.6% -- a truer number, since the noisy
 entirely, showing only red/orange -- meaningful now that both are
 guaranteed to reflect an actual camera-FOV or signal-orientation
 limitation rather than routing noise.
+
+## Why an interactive viewer, not just a bigger/better static plot
+
+Repeated confusion in this project traced back to the same root cause:
+the static plot shows *whether* a point is covered, not *why*, so
+questions like "why is this red" or "would widening the FOV actually help
+here" had to be answered by re-deriving the geometry by hand each time
+(see the FOV-doubling comparison earlier in this history: doubling
+`fov_h`/`fov_v` mostly converted red into orange, not green, because
+`facing_tolerance_deg` is an independent constraint FOV width can't fix --
+a real but easy-to-miss distinction from a colored dot alone).
+
+`webapp.py` + `static/` exists to make that geometry inspectable directly:
+click a waypoint, and `calc_camera_frame_offset` places every candidate
+light at its actual position inside (or outside) a rendered FOV rectangle,
+next to the exact numbers (`yaw_diff`, `pitch_diff`, `in_fov`,
+`facing_camera`) that produced it. It deliberately reuses Modules A-C
+unchanged (parses the map and runs `run_simulation` once at startup) --
+the only new logic is `calc_camera_frame_offset`, which is `check_
+fov_inclusion`'s own yaw/pitch-diff math exposed as a raw offset instead
+of collapsed into a boolean.
+
+Scoped to v1 as a fixed-camera-spec viewer (confirmed with the user
+before building it): no live FOV/range sliders, restart with different
+flags to inspect a different spec. The full per-(point, light) result set
+is too large to ship to the browser as one JSON blob (950k+ rows on the
+bundled map), so the frontend only receives one row per unique waypoint
+(a worst-case-wins `status`, same convention as the static plot's z-order)
+for the map overview, and fetches per-light detail on click.

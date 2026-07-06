@@ -29,6 +29,23 @@ python3 main.py --config camera_spec.yaml --fov-h 60 --signal-type pedestrian
 python3 main.py --config camera_spec.yaml --blind-only
 ```
 
+### Interactive viewer
+
+`main.py` produces a static plot; `webapp.py` is for drilling into *why* a
+specific point is red/orange -- it runs the same simulation once, then
+serves a small local page where you click a waypoint and see, literally,
+where each candidate light falls inside (or outside) the camera's FOV
+rectangle, next to a numeric table of the same values:
+
+```bash
+python3 webapp.py --config camera_spec.yaml
+# open http://127.0.0.1:8000
+```
+
+Takes the same `--map`/`--config`/camera flags as `main.py`, plus `--port`.
+It's a fixed-camera-spec viewer (no live FOV sliders) -- restart with
+different flags to inspect a different camera spec.
+
 CLI flags always take precedence over a `--config` YAML, which takes
 precedence over built-in defaults (`CameraSpec` in `models.py`).
 
@@ -167,7 +184,10 @@ Side view, same waypoint (vertical FOV / pitch check)
 in `geometry_calculator.py` implement exactly this, and are pure functions --
 see their docstrings and `tests/test_geometry_calculator.py` for the
 boundary cases (e.g. a target exactly on the fov_h/2 edge, or a light
-exactly on the 90-degree relevance/ahead threshold).
+exactly on the 90-degree relevance/ahead threshold). `calc_camera_frame_offset`
+exposes the same yaw/pitch-diff geometry as a raw offset instead of a
+boolean, which is what the interactive viewer (`webapp.py`) uses to place
+each candidate light inside its FOV-rectangle rendering.
 
 ## Architecture
 
@@ -179,6 +199,7 @@ Each module is independently testable and has a single responsibility:
 - `config.py` -- YAML text -> `AppConfig`
 - `fov_simulator.py` -- combines Modules A + B's output to run the simulation
 - `visualizer.py` -- the only module that imports matplotlib
+- `webapp.py` -- the only module that imports Flask; serves the interactive point-inspection viewer (`static/`) over a small JSON API
 - `main.py` -- CLI wiring
 
 ## Testing

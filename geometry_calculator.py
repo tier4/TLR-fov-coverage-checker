@@ -119,6 +119,43 @@ def _normalize_angle_deg(angle: float) -> float:
 _BOUNDARY_EPSILON_DEG = 1e-9  # absorbs float round-trip noise (~1e-14) at exact FOV edges
 
 
+def calc_camera_frame_offset(
+    cam_pos: Point3D,
+    cam_yaw: float,
+    cam_pitch: float,
+    target_pos: Point3D,
+) -> tuple[float, float]:
+    """How far `target_pos` sits from dead-center of the camera's view.
+
+    Returns (yaw_diff, pitch_diff) in degrees: the horizontal and vertical
+    angle between where the camera looks (cam_yaw/cam_pitch) and the
+    bearing/elevation to the target. (0.0, 0.0) means dead center; a target
+    at the edge of a `fov_h`-degree-wide FOV has |yaw_diff| == fov_h / 2.
+    This is the same geometry `check_fov_inclusion` tests against a
+    threshold, exposed as a raw offset instead of a boolean so a caller
+    (e.g. a "what does the camera see" viewer) can place the target within
+    the frame instead of just asking in/out.
+    """
+    dx = target_pos.x - cam_pos.x
+    dy = target_pos.y - cam_pos.y
+    dz = target_pos.z - cam_pos.z
+    horizontal_dist = math.hypot(dx, dy)
+
+    if horizontal_dist == 0.0 and dz == 0.0:
+        return 0.0, 0.0
+
+    target_yaw = math.degrees(math.atan2(dy, dx))
+    yaw_diff = _normalize_angle_deg(target_yaw - cam_yaw)
+
+    if horizontal_dist == 0.0:
+        target_pitch = 90.0 if dz > 0 else -90.0
+    else:
+        target_pitch = math.degrees(math.atan2(dz, horizontal_dist))
+    pitch_diff = _normalize_angle_deg(target_pitch - cam_pitch)
+
+    return yaw_diff, pitch_diff
+
+
 def check_fov_inclusion(
     cam_pos: Point3D,
     cam_yaw: float,
@@ -133,24 +170,9 @@ def check_fov_inclusion(
     along cam_yaw in the XY plane and cam_pitch above/below the horizon.
     Boundary angles (exactly fov/2 away) count as included.
     """
-    dx = target_pos.x - cam_pos.x
-    dy = target_pos.y - cam_pos.y
-    dz = target_pos.z - cam_pos.z
-    horizontal_dist = math.hypot(dx, dy)
-
-    if horizontal_dist == 0.0 and dz == 0.0:
-        return True
-
-    target_yaw = math.degrees(math.atan2(dy, dx))
-    yaw_diff = _normalize_angle_deg(target_yaw - cam_yaw)
+    yaw_diff, pitch_diff = calc_camera_frame_offset(cam_pos, cam_yaw, cam_pitch, target_pos)
     if abs(yaw_diff) > fov_h / 2.0 + _BOUNDARY_EPSILON_DEG:
         return False
-
-    if horizontal_dist == 0.0:
-        target_pitch = 90.0 if dz > 0 else -90.0
-    else:
-        target_pitch = math.degrees(math.atan2(dz, horizontal_dist))
-    pitch_diff = _normalize_angle_deg(target_pitch - cam_pitch)
     return abs(pitch_diff) <= fov_v / 2.0 + _BOUNDARY_EPSILON_DEG
 
 

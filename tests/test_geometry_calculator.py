@@ -3,6 +3,7 @@ import math
 import pytest
 
 from geometry_calculator import (
+    calc_camera_frame_offset,
     calc_center_line,
     calc_centroid,
     calc_distance_3d,
@@ -230,3 +231,49 @@ def test_target_ahead_is_wider_than_typical_fov_by_default():
     target = Point3D(100 * math.cos(bearing), 100 * math.sin(bearing), 0)
     assert check_target_ahead(cam_pos, cam_yaw=0.0, target_pos=target) is True
     assert check_fov_inclusion(cam_pos, cam_yaw=0.0, cam_pitch=0.0, target_pos=target, fov_h=30.0) is False
+
+
+# --- calc_camera_frame_offset: boundary-value tests -------------------------
+
+
+def test_frame_offset_dead_center_is_zero():
+    cam_pos = Point3D(0, 0, 0)
+    target = Point3D(100, 0, 0)
+    yaw_diff, pitch_diff = calc_camera_frame_offset(cam_pos, cam_yaw=0.0, cam_pitch=0.0, target_pos=target)
+    assert yaw_diff == pytest.approx(0.0)
+    assert pitch_diff == pytest.approx(0.0)
+
+
+def test_frame_offset_horizontal_matches_bearing_difference():
+    cam_pos = Point3D(0, 0, 0)
+    target = Point3D(0, 100, 0)  # bearing 90deg, camera looking at 0deg
+    yaw_diff, pitch_diff = calc_camera_frame_offset(cam_pos, cam_yaw=0.0, cam_pitch=0.0, target_pos=target)
+    assert yaw_diff == pytest.approx(90.0)
+    assert pitch_diff == pytest.approx(0.0)
+
+
+def test_frame_offset_vertical_matches_elevation_angle():
+    cam_pos = Point3D(0, 0, 0)
+    horizontal_dist = 100.0
+    dz = horizontal_dist  # 45 degree elevation
+    target = Point3D(horizontal_dist, 0, dz)
+    yaw_diff, pitch_diff = calc_camera_frame_offset(cam_pos, cam_yaw=0.0, cam_pitch=0.0, target_pos=target)
+    assert yaw_diff == pytest.approx(0.0)
+    assert pitch_diff == pytest.approx(45.0)
+
+
+def test_frame_offset_camera_and_target_coincide_is_zero():
+    p = Point3D(5, 5, 5)
+    yaw_diff, pitch_diff = calc_camera_frame_offset(p, cam_yaw=0.0, cam_pitch=0.0, target_pos=p)
+    assert (yaw_diff, pitch_diff) == (0.0, 0.0)
+
+
+def test_frame_offset_agrees_with_check_fov_inclusion_at_the_edge():
+    # a target placed exactly at calc_camera_frame_offset's reported edge
+    # should be exactly at check_fov_inclusion's inclusion boundary too.
+    cam_pos = Point3D(0, 0, 0)
+    target = Point3D(100, 100, 20)
+    yaw_diff, pitch_diff = calc_camera_frame_offset(cam_pos, cam_yaw=10.0, cam_pitch=5.0, target_pos=target)
+    assert check_fov_inclusion(
+        cam_pos, cam_yaw=10.0, cam_pitch=5.0, target_pos=target, fov_h=abs(yaw_diff) * 2, fov_v=abs(pitch_diff) * 2
+    ) is True
