@@ -1,0 +1,19 @@
+# Camera / simulation configuration for the Lanelet2 traffic light FOV checker.
+# Every field is optional -- anything omitted falls back to CameraSpec's
+# built-in defaults. CLI flags (--fov-h, --signal-type, --map, ...) always
+# take precedence over values here, which take precedence over the defaults.
+#
+# Usage: python3 main.py --config camera_spec.yaml
+
+map: lanelet2_map.osm
+output: fov_coverage_result_vehicle_30deg.png
+
+signal_type: vehicle  # vehicle | pedestrian | both
+
+camera:
+  height: 3.0               # camera mount height [m]
+  fov_h: 30.0                # horizontal field of view [deg]
+  fov_v: 17.0                # vertical field of view [deg]
+  min_range: 50.0            # min detection range [m]
+  max_range: 250.0           # max detection range [m]
+  facing_tolerance_deg: 45.0 # max angle between signal face and camera to still be legible [deg]

@@ -1,0 +1,19 @@
+# Map data / stop-point exports -- large, often non-redistributable, and
+# environment-specific. Supply your own and point at it via --map or a
+# --config YAML's `map:` key.
+*.osm
+*.csv
+
+# Generated output
+fov_coverage_result*.png
+
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+*.egg-info/
+.venv/
+venv/
+
+# Editor / tooling
+.claude/
