@@ -192,3 +192,30 @@ def check_light_relevant_to_lane(
     """
     diff = _normalize_angle_deg(tl_facing_yaw - lane_heading)
     return abs(diff) > threshold_deg + _BOUNDARY_EPSILON_DEG
+
+
+def check_target_ahead(
+    cam_pos: Point3D,
+    cam_yaw: float,
+    target_pos: Point3D,
+    max_angle_diff: float = 90.0,
+) -> bool:
+    """Whether `target_pos` lies within `max_angle_diff` degrees of straight
+    ahead of `cam_yaw` (horizontal bearing only) -- i.e. hasn't already been
+    passed, rather than actually being within the camera's FOV.
+
+    Deliberately much wider than the camera's real FOV cone
+    (`check_fov_inclusion`'s `fov_h`): a target more than 90 degrees off
+    the direction of travel is behind the vehicle. A forward-facing camera
+    not seeing something behind it isn't a camera-spec gap -- it's not
+    meaningful to report as a blind spot at all, so this is a route-
+    position pre-filter run before the real FOV check, not a substitute
+    for it.
+    """
+    dx = target_pos.x - cam_pos.x
+    dy = target_pos.y - cam_pos.y
+    if dx == 0.0 and dy == 0.0:
+        return True
+    bearing = math.degrees(math.atan2(dy, dx))
+    diff = _normalize_angle_deg(bearing - cam_yaw)
+    return abs(diff) <= max_angle_diff + _BOUNDARY_EPSILON_DEG

@@ -24,6 +24,9 @@ python3 main.py --config camera_spec.yaml
 
 # YAML as a base profile, one-off override on top
 python3 main.py --config camera_spec.yaml --fov-h 60 --signal-type pedestrian
+
+# Only plot the gaps -- useful once a full plot gets too dense to read
+python3 main.py --config camera_spec.yaml --blind-only
 ```
 
 CLI flags always take precedence over a `--config` YAML, which takes
@@ -40,12 +43,14 @@ Available settings (CLI flag / YAML key under `camera:`):
 | `--max-range` | `max_range` | max detection range [m] | 200.0 |
 | `--facing-tolerance` | `facing_tolerance_deg` | max angle between the signal's face and the camera for it to still be legible [deg] | 45.0 |
 | `--signal-type` | `signal_type` (top-level) | `vehicle` / `pedestrian` / `both` | both |
+| `--blind-only` / `--no-blind-only` | `blind_only` (top-level) | plot only uncovered waypoints, hiding the Covered/green layer | false |
 | `--map` | `map` (top-level) | path to the Lanelet2 `.osm` file | *(required)* |
 | `--output` | `output` (top-level) | output plot path | `fov_coverage_result.png` |
 
 The printed report breaks coverage down by signal type and by *why* a
 waypoint is uncovered (out of the camera's FOV vs. the signal facing away
-from it), and the saved plot color-codes the same three cases.
+from it), and the saved plot color-codes the same three cases (or, with
+`--blind-only`, only the two "uncovered" cases).
 
 ## How coverage is computed
 
@@ -76,6 +81,28 @@ Plan view: a light only belongs to the direction it faces
 
   relevant = |angle(facing_yaw, lane_heading)| > 90deg   (else skip this
                                                             (lane, light) pair)
+```
+
+A second, independent pre-filter then drops any light the camera has
+already driven past along the route -- a forward-facing camera not seeing
+something behind it isn't a camera-spec gap worth reporting:
+
+```
+Plan view: a light already behind the camera is skipped too
+==============================================================
+
+  already-passed light *  --------  o ------->  o -------> next light *
+                          (behind, > 90deg              (ahead, within
+                           off cam_yaw: skipped,          90deg of cam_yaw:
+                           not scored at all)             still a candidate)
+
+  ahead = |angle(cam_yaw, bearing(camera -> light))| <= 90deg   (much wider
+                                                                  than fov_h --
+                                                                  a route-
+                                                                  position
+                                                                  filter, not
+                                                                  the real FOV
+                                                                  check below)
 ```
 
 ```
@@ -136,11 +163,11 @@ Side view, same waypoint (vertical FOV / pitch check)
 ```
 
 `check_fov_inclusion`, `check_light_facing_camera`,
-`check_light_relevant_to_lane` and `calc_heading_yaw` in
-`geometry_calculator.py` implement exactly this, and are pure functions --
+`check_light_relevant_to_lane`, `check_target_ahead` and `calc_heading_yaw`
+in `geometry_calculator.py` implement exactly this, and are pure functions --
 see their docstrings and `tests/test_geometry_calculator.py` for the
 boundary cases (e.g. a target exactly on the fov_h/2 edge, or a light
-exactly on the 90-degree relevance threshold).
+exactly on the 90-degree relevance/ahead threshold).
 
 ## Architecture
 

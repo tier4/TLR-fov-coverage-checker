@@ -22,6 +22,7 @@ class AppConfig:
     map_path: str | None = None
     output_path: str | None = None
     signal_type: str = "both"
+    blind_only: bool = False
     camera: CameraSpec = _DEFAULT_CAMERA
 
 
@@ -49,5 +50,6 @@ def load_config(yaml_string: str) -> AppConfig:
         map_path=raw.get("map"),
         output_path=raw.get("output"),
         signal_type=signal_type,
+        blind_only=bool(raw.get("blind_only", False)),
         camera=camera,
     )

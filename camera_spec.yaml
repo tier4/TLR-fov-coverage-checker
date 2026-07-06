@@ -9,6 +9,7 @@ map: lanelet2_map.osm
 output: fov_coverage_result_vehicle_30deg.png
 
 signal_type: vehicle  # vehicle | pedestrian | both
+blind_only: false     # true: plot only uncovered waypoints (hide the Covered/green layer)
 
 camera:
   height: 3.0               # camera mount height [m]

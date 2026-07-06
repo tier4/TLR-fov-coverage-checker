@@ -11,6 +11,7 @@ from geometry_calculator import (
     check_fov_inclusion,
     check_light_facing_camera,
     check_light_relevant_to_lane,
+    check_target_ahead,
 )
 from models import Point3D
 
@@ -190,3 +191,42 @@ def test_relevant_to_lane_is_symmetric_regardless_of_absolute_heading():
     # only the angular difference matters, not the absolute compass directions
     assert check_light_relevant_to_lane(tl_facing_yaw=270.0, lane_heading=90.0) is True
     assert check_light_relevant_to_lane(tl_facing_yaw=-90.0, lane_heading=90.0) is True
+
+
+# --- check_target_ahead: boundary-value tests -------------------------------
+
+
+def test_target_directly_ahead_is_ahead():
+    cam_pos = Point3D(0, 0, 0)
+    target = Point3D(100, 0, 0)
+    assert check_target_ahead(cam_pos, cam_yaw=0.0, target_pos=target) is True
+
+
+def test_target_directly_behind_is_not_ahead():
+    cam_pos = Point3D(0, 0, 0)
+    target = Point3D(-100, 0, 0)
+    assert check_target_ahead(cam_pos, cam_yaw=0.0, target_pos=target) is False
+
+
+def test_target_exactly_on_90_degree_edge_is_ahead():
+    cam_pos = Point3D(0, 0, 0)
+    target = Point3D(0, 100, 0)  # bearing = 90deg from cam_yaw=0
+    assert check_target_ahead(cam_pos, cam_yaw=0.0, target_pos=target, max_angle_diff=90.0) is True
+
+
+def test_target_just_outside_90_degree_edge_is_not_ahead():
+    cam_pos = Point3D(0, 0, 0)
+    bearing = math.radians(90.1)
+    target = Point3D(100 * math.cos(bearing), 100 * math.sin(bearing), 0)
+    assert check_target_ahead(cam_pos, cam_yaw=0.0, target_pos=target, max_angle_diff=90.0) is False
+
+
+def test_target_ahead_is_wider_than_typical_fov_by_default():
+    # a target 45deg off-axis would already fail a narrow fov_h=30 FOV check,
+    # but check_target_ahead's default 90deg cone still counts it as ahead --
+    # it's a route-position filter, not a stand-in for the real FOV check.
+    cam_pos = Point3D(0, 0, 0)
+    bearing = math.radians(45.0)
+    target = Point3D(100 * math.cos(bearing), 100 * math.sin(bearing), 0)
+    assert check_target_ahead(cam_pos, cam_yaw=0.0, target_pos=target) is True
+    assert check_fov_inclusion(cam_pos, cam_yaw=0.0, cam_pitch=0.0, target_pos=target, fov_h=30.0) is False

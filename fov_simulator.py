@@ -31,11 +31,13 @@ from geometry_calculator import (
     check_fov_inclusion,
     check_light_facing_camera,
     check_light_relevant_to_lane,
+    check_target_ahead,
 )
 from models import CameraSpec, LanePath, Point3D, TrafficLight, ValidationResult
 
 SAMPLE_INTERVAL_M = 1.0
 LANE_DIRECTION_THRESHOLD_DEG = 90.0
+AHEAD_THRESHOLD_DEG = 90.0
 
 
 def run_simulation(
@@ -55,12 +57,15 @@ def run_simulation(
     plausibly meant for this lane's direction of travel (see
     `check_light_relevant_to_lane`) -- a light facing the same way this
     lane travels belongs to a parallel opposing-direction lane at the same
-    location, not this one, and is skipped entirely rather than counted as
-    a blind spot. A candidate is `is_covered` only if it is both inside the
-    camera's FOV cone AND the signal face is oriented toward the camera
-    within `camera.facing_tolerance_deg` (lights with unknown facing_yaw
-    skip the lane-relevance filter too, since it can't be evaluated, and
-    are never excluded by the facing check either).
+    location, not this one -- AND that hasn't already been passed along
+    the route (see `check_target_ahead`; a light more than 90 degrees off
+    the direction of travel is behind the vehicle, which isn't a
+    meaningful camera-spec gap). Both are skipped entirely rather than
+    counted as a blind spot. A candidate is `is_covered` only if it is
+    both inside the camera's FOV cone AND the signal face is oriented
+    toward the camera within `camera.facing_tolerance_deg` (lights with
+    unknown facing_yaw skip the lane-relevance filter too, since it can't
+    be evaluated, and are never excluded by the facing check either).
     """
     if not lanes or not traffic_lights:
         return []
@@ -104,6 +109,14 @@ def run_simulation(
                 tl_facing_yaw=facing_yaw,
                 lane_heading=yaw_cache[i],
                 threshold_deg=LANE_DIRECTION_THRESHOLD_DEG,
+            ):
+                continue
+
+            if not check_target_ahead(
+                cam_pos=cam_pos,
+                cam_yaw=yaw_cache[i],
+                target_pos=tl_pos,
+                max_angle_diff=AHEAD_THRESHOLD_DEG,
             ):
                 continue
 

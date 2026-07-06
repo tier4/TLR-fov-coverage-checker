@@ -122,3 +122,46 @@ The visual difference on the bundled map is large: with the previous
 "problems win" it's now dominated by red, revealing that true full
 coverage (every relevant light seen) at a given point is fairly rare with
 the default 30x17 degree FOV camera.
+
+## Most "out of FOV" results were just lights the car had already driven past
+
+**Symptom:** asked to add a mode that plots only the uncovered waypoints,
+with an explicit warning not to include "it's out of FOV because it's
+behind the camera" as a manufactured blind spot.
+
+**Root cause:** `check_light_relevant_to_lane` (see above) only checks
+whether a light's facing direction is compatible with a lane's direction
+of travel -- it says nothing about *where along the route* the camera
+currently is. A light correctly assigned to an eastbound lane (facing
+back at eastbound traffic) is relevant for that lane's entire length, but
+once the camera has driven past it, that light sits behind the camera,
+and a forward-facing camera not seeing something behind it isn't a
+camera-spec limitation -- it's not a meaningful finding at all.
+
+Measured before fixing it: of the 1,335,021 "out of FOV" results on the
+bundled Odaiba map, 897,715 (67.2%) were for lights more than 90 degrees
+off the camera's heading at that point -- i.e. behind it, not beside or
+ahead of it.
+
+**Fix:** `check_target_ahead(cam_pos, cam_yaw, target_pos,
+max_angle_diff=90.0)` (`geometry_calculator.py`) is a route-position
+pre-filter, applied in `run_simulation` alongside (but independently of)
+`check_light_relevant_to_lane` -- deliberately much wider than the
+camera's actual FOV cone (90 degrees vs. a typical 30-degree `fov_h`), so
+it only excludes things genuinely behind the vehicle, not things merely
+outside the narrow FOV. It applies even when `facing_yaw` is unknown
+(e.g. pedestrian signals), since "behind me" doesn't depend on knowing
+which way the light faces.
+
+This is a simulation-level fix (like the lane-direction filter), not
+something scoped to the new blind-spots-only view: it also cleaned up the
+full coverage plot and the printed statistics. On the bundled map,
+evaluated candidates dropped from 1,849,440 to 951,725, and overall
+coverage went from 20.4% to 39.6% -- a truer number, since the noisy
+"can't see behind myself" cases are gone from the denominator too.
+
+**The new setting:** `plot_results(..., blind_only=True)` / `--blind-only`
+/ `blind_only: true` in a `--config` YAML skips the green "Covered" layer
+entirely, showing only red/orange -- meaningful now that both are
+guaranteed to reflect an actual camera-FOV or signal-orientation
+limitation rather than routing noise.

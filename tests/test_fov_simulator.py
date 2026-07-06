@@ -12,6 +12,13 @@ STRAIGHT_LANE = LanePath(
     center_line=[Point3D(x, 0.0, 0.0) for x in range(0, 201, 20)],
 )
 
+# entirely east of x=100 -- a light at x=100 is behind every waypoint here,
+# since this lane (like STRAIGHT_LANE) still travels east (cam_yaw=0).
+TRAILING_LANE = LanePath(
+    id="lane-2",
+    center_line=[Point3D(x, 0.0, 0.0) for x in range(150, 201, 10)],
+)
+
 
 def test_run_simulation_empty_inputs_return_empty():
     assert run_simulation([], []) == []
@@ -87,3 +94,22 @@ def test_run_simulation_unknown_facing_yaw_never_blocks_coverage_or_relevance():
     results = run_simulation([STRAIGHT_LANE], [tl])
     assert results
     assert all(r.facing_camera for r in results)
+
+
+def test_run_simulation_excludes_lights_already_behind_the_camera():
+    # facing_yaw=180 makes this light relevant to an eastbound lane (it
+    # passes check_light_relevant_to_lane), but every waypoint on
+    # TRAILING_LANE has already driven past it -- the light sits behind,
+    # not ahead. It shouldn't be scored as a blind spot just because a
+    # forward-facing camera can't see behind itself.
+    tl = TrafficLight(id="already-passed", bulbs=[Point3D(100.0, 0.0, 5.0)], signal_type="vehicle", facing_yaw=180.0)
+    results = run_simulation([TRAILING_LANE], [tl])
+    assert results == []
+
+
+def test_run_simulation_ahead_filter_applies_even_without_facing_yaw():
+    # pedestrian-style lights with no facing_yaw still shouldn't be scored
+    # against a lane that has already passed them.
+    tl = TrafficLight(id="ped-already-passed", bulbs=[Point3D(100.0, 0.0, 5.0)], signal_type="pedestrian")
+    results = run_simulation([TRAILING_LANE], [tl])
+    assert results == []

@@ -18,6 +18,7 @@ def plot_results(
     results: list[ValidationResult],
     traffic_lights: list[TrafficLight],
     lanes: list[LanePath] | None = None,
+    blind_only: bool = False,
     save_path: str | None = "fov_coverage_result.png",
     show: bool = False,
 ) -> None:
@@ -38,12 +39,20 @@ def plot_results(
     spot is never hidden by an unrelated light that happens to be fine at
     that spot -- see docs/behavior.md.
 
-    `results` only contains waypoints within [camera.min_range, camera.max_range]
-    of at least one evaluated traffic light -- mid-block stretches farther than
-    that from every light are never evaluated at all, by design (see
-    docs/behavior.md). Passing `lanes` draws the full road network as a thin
-    grey base layer underneath, so those un-evaluated stretches still show up
-    as road rather than reading as a break in the map.
+    `results` only contains candidates that are within [camera.min_range,
+    camera.max_range], plausibly meant for the lane's direction of travel,
+    and not already behind the camera along the route (see
+    `run_simulation`'s docstring and docs/behavior.md) -- so every red/
+    orange point here reflects an actual camera-FOV/orientation limitation,
+    not routing noise. Mid-block stretches farther than max_range from
+    every light are never evaluated at all, by design. Passing `lanes`
+    draws the full road network as a thin grey base layer underneath, so
+    those un-evaluated stretches still show up as road rather than reading
+    as a break in the map.
+
+    `blind_only=True` skips the "Covered" (green) layer entirely, showing
+    only where the camera spec falls short -- useful once a full plot gets
+    too dense to spot the gaps in.
     """
     fig, ax = plt.subplots(figsize=(12, 10))
 
@@ -58,7 +67,7 @@ def plot_results(
             )
         ax.plot([], [], color="lightgrey", linewidth=2, label="Road (not evaluated: out of range of any light)")
 
-    covered = [r for r in results if r.is_covered]
+    covered = [] if blind_only else [r for r in results if r.is_covered]
     facing_away = [r for r in results if r.in_fov and not r.facing_camera]
     out_of_fov = [r for r in results if not r.in_fov]
 
@@ -100,7 +109,7 @@ def plot_results(
 
     ax.set_xlabel("Local X [m]")
     ax.set_ylabel("Local Y [m]")
-    ax.set_title("Traffic Light FOV Coverage")
+    ax.set_title("Traffic Light FOV Coverage -- Blind Spots Only" if blind_only else "Traffic Light FOV Coverage")
     ax.set_aspect("equal", adjustable="datalim")
     ax.legend(loc="upper right")
     ax.grid(True, alpha=0.3)
