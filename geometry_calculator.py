@@ -171,3 +171,24 @@ def check_light_facing_camera(
     bearing_to_cam = calc_heading_yaw(tl_pos, cam_pos)
     diff = _normalize_angle_deg(bearing_to_cam - tl_facing_yaw)
     return abs(diff) <= max_angle_diff + _BOUNDARY_EPSILON_DEG
+
+
+def check_light_relevant_to_lane(
+    tl_facing_yaw: float,
+    lane_heading: float,
+    threshold_deg: float = 90.0,
+) -> bool:
+    """Whether a signal facing `tl_facing_yaw` is plausibly meant to be seen by
+    traffic travelling along `lane_heading`, as opposed to belonging to an
+    opposing-direction lane at the same physical location.
+
+    A signal that faces roughly opposite the lane's direction of travel
+    (angular difference near 180 degrees) shines back at approaching
+    traffic on this lane -- relevant. One that faces roughly the same way
+    this lane travels (angular difference near 0) shines the other way,
+    down the parallel lane going the opposite direction -- not relevant to
+    this lane at all, regardless of distance or camera FOV. `threshold_deg`
+    is the angular midpoint (90 degrees) that separates the two cases.
+    """
+    diff = _normalize_angle_deg(tl_facing_yaw - lane_heading)
+    return abs(diff) > threshold_deg + _BOUNDARY_EPSILON_DEG

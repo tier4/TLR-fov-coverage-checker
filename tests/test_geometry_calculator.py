@@ -10,6 +10,7 @@ from geometry_calculator import (
     calc_resample_by_distance,
     check_fov_inclusion,
     check_light_facing_camera,
+    check_light_relevant_to_lane,
 )
 from models import Point3D
 
@@ -156,3 +157,36 @@ def test_facing_camera_just_outside_angle_edge_is_not_visible():
     bearing = math.radians(45.1)
     cam_pos = Point3D(100 * math.cos(bearing), 100 * math.sin(bearing), 0)
     assert check_light_facing_camera(tl_pos, tl_facing_yaw=0.0, cam_pos=cam_pos, max_angle_diff=45.0) is False
+
+
+# --- check_light_relevant_to_lane: boundary-value tests --------------------
+
+
+def test_relevant_when_facing_directly_opposite_lane_heading():
+    # lane travels east (0deg); light faces west (180deg) -- shines back at
+    # this lane's approaching traffic.
+    assert check_light_relevant_to_lane(tl_facing_yaw=180.0, lane_heading=0.0) is True
+
+
+def test_not_relevant_when_facing_same_direction_as_lane_heading():
+    # light faces the same way the lane travels -- it belongs to a parallel
+    # lane going the opposite direction at the same location.
+    assert check_light_relevant_to_lane(tl_facing_yaw=0.0, lane_heading=0.0) is False
+
+
+def test_relevant_just_inside_the_90_degree_threshold():
+    assert check_light_relevant_to_lane(tl_facing_yaw=90.1, lane_heading=0.0, threshold_deg=90.0) is True
+
+
+def test_not_relevant_exactly_on_the_90_degree_threshold():
+    assert check_light_relevant_to_lane(tl_facing_yaw=90.0, lane_heading=0.0, threshold_deg=90.0) is False
+
+
+def test_not_relevant_just_outside_the_90_degree_threshold():
+    assert check_light_relevant_to_lane(tl_facing_yaw=89.9, lane_heading=0.0, threshold_deg=90.0) is False
+
+
+def test_relevant_to_lane_is_symmetric_regardless_of_absolute_heading():
+    # only the angular difference matters, not the absolute compass directions
+    assert check_light_relevant_to_lane(tl_facing_yaw=270.0, lane_heading=90.0) is True
+    assert check_light_relevant_to_lane(tl_facing_yaw=-90.0, lane_heading=90.0) is True

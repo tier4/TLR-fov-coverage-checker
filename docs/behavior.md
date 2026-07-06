@@ -47,3 +47,47 @@ stop lines don't apply to pedestrian crossings. `check_light_facing_camera`
 treats an unknown `facing_yaw` as "always faces the camera" rather than
 guessing, so pedestrian coverage numbers reflect FOV geometry only, not an
 orientation check. See `map_parser.py`'s `parse_traffic_lights` docstring.
+
+## Couldn't tell which travel direction a covered/blind point belonged to
+
+**Symptom:** opposite-direction lanelets on the same physical road (e.g. a
+northbound and southbound lanelet a few meters apart) both get scanned, and
+both could have a given traffic light within `[min_range, max_range]`. The
+plot had no way to show *which direction* a given colored point was scored
+for, so overlapping outbound/inbound results looked ambiguous.
+
+**Root cause, once looked into:** it wasn't only a rendering ambiguity.
+Before a lane-direction check existed, `run_simulation` evaluated a
+traffic light against *every* lane within range regardless of which
+direction that light actually faces. A light meant for the northbound
+lane (facing south, back at northbound traffic) was also being evaluated
+against the adjacent southbound lane, where it geometrically sits within
+the narrow FOV cone too (dead ahead, just facing the wrong way) -- scored
+as a blind spot (`in_fov=True, facing_camera=False`) for a lane it was
+never meant to regulate. This inflated the "facing away" bucket with
+noise unrelated to the camera spec, on top of making direction
+indistinguishable.
+
+**Fix:** `check_light_relevant_to_lane(tl_facing_yaw, lane_heading,
+threshold_deg=90.0)` (`geometry_calculator.py`) filters candidates
+*before* the FOV/facing checks in `run_simulation`: a light facing within
+90 degrees of the lane's own travel direction (i.e. shining the same way
+the lane travels) belongs to the opposing lane and is skipped entirely,
+not scored as a blind spot. Lights with `facing_yaw = None` (pedestrian
+signals, see above) skip this filter too, since relevance can't be
+evaluated without a facing direction.
+
+Measured impact on the bundled Odaiba map: evaluated candidates dropped
+from 3,049,868 to 1,849,440 (-39%), and the "in-FOV-but-facing-away" count
+dropped from 454,416 to 137,219 -- the `covered` count (377,200) didn't
+change at all, confirming the removed candidates were noise, not signal.
+
+This also resolved the direction-ambiguity concern without needing a
+separate offset/"two ribbons" rendering mode: Lanelet2 already models
+each direction of travel as its own physically-offset lanelet (own left/
+right boundary), so once irrelevant-direction lights stopped being
+evaluated, zooming into both a divided road and a dense narrow-street grid
+showed the two directions as clearly distinguishable parallel green/red
+lines rather than a blended overlap. If a future map turns out to have
+directions close enough to still be ambiguous at a glance, revisit the
+perpendicular-offset rendering idea then.

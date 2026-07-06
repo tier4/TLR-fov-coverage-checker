@@ -51,7 +51,32 @@ from it), and the saved plot color-codes the same three cases.
 
 For every 1m waypoint on every lane, a camera at `point.z + camera.height`
 looks toward the next waypoint (`cam_yaw`, pitch fixed at 0) and is checked
-against every traffic light within range:
+against every traffic light within range.
+
+Before that per-waypoint check runs, a light is skipped for a lane
+entirely if it doesn't plausibly belong to that lane's direction of
+travel -- opposite-direction lanelets on the same physical road are only
+a few meters apart, so without this a light meant for northbound traffic
+would also get scored (as a blind spot) against the adjacent southbound
+lane it was never meant to regulate:
+
+```
+Plan view: a light only belongs to the direction it faces
+==========================================================
+
+        northbound lane  ->  o->  o->  o->  o->  *  (light facing south,
+                                                      back at northbound
+                                                      traffic: relevant)
+                                                  |
+        southbound lane  <-  o<-  o<-  o<-  o<-  |  (same light: facing the
+                                                     *same* way this lane
+                                                     travels -> belongs to
+                                                     the other lane, skipped
+                                                     entirely, not scored)
+
+  relevant = |angle(facing_yaw, lane_heading)| > 90deg   (else skip this
+                                                            (lane, light) pair)
+```
 
 ```
 Top-down view, one lane waypoint vs. one traffic light
@@ -110,10 +135,12 @@ Side view, same waypoint (vertical FOV / pitch check)
   target_pitch = atan2(dz, horizontal_dist)   (cam_pitch is fixed at 0.0)
 ```
 
-`check_fov_inclusion`, `check_light_facing_camera` and `calc_heading_yaw` in
+`check_fov_inclusion`, `check_light_facing_camera`,
+`check_light_relevant_to_lane` and `calc_heading_yaw` in
 `geometry_calculator.py` implement exactly this, and are pure functions --
 see their docstrings and `tests/test_geometry_calculator.py` for the
-boundary cases (e.g. a target exactly on the fov_h/2 edge).
+boundary cases (e.g. a target exactly on the fov_h/2 edge, or a light
+exactly on the 90-degree relevance threshold).
 
 ## Architecture
 

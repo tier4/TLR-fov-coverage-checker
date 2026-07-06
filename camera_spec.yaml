@@ -14,6 +14,6 @@ camera:
   height: 3.0               # camera mount height [m]
   fov_h: 30.0                # horizontal field of view [deg]
   fov_v: 17.0                # vertical field of view [deg]
-  min_range: 50.0            # min detection range [m]
+  min_range: 20.0            # min detection range [m]
   max_range: 250.0           # max detection range [m]
   facing_tolerance_deg: 45.0 # max angle between signal face and camera to still be legible [deg]

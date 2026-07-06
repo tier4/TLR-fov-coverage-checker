@@ -30,10 +30,12 @@ from geometry_calculator import (
     calc_resample_by_distance,
     check_fov_inclusion,
     check_light_facing_camera,
+    check_light_relevant_to_lane,
 )
 from models import CameraSpec, LanePath, Point3D, TrafficLight, ValidationResult
 
 SAMPLE_INTERVAL_M = 1.0
+LANE_DIRECTION_THRESHOLD_DEG = 90.0
 
 
 def run_simulation(
@@ -46,13 +48,19 @@ def run_simulation(
     can detect nearby traffic lights.
 
     For each waypoint: the camera sits `camera.height` above it, looks
-    toward the next waypoint (pitch fixed at 0.0), and is checked against
+    toward the next waypoint (pitch fixed at 0.0). It is checked against
     every traffic light (optionally restricted to `signal_types`, e.g.
     {"vehicle"}) whose representative position (bulb centroid) is within
-    [camera.min_range, camera.max_range]. A candidate is `is_covered` only
-    if it is both inside the camera's FOV cone AND the signal face is
-    oriented toward the camera within `camera.facing_tolerance_deg`
-    (lights with unknown facing_yaw are never excluded by the facing check).
+    [camera.min_range, camera.max_range] AND whose facing direction is
+    plausibly meant for this lane's direction of travel (see
+    `check_light_relevant_to_lane`) -- a light facing the same way this
+    lane travels belongs to a parallel opposing-direction lane at the same
+    location, not this one, and is skipped entirely rather than counted as
+    a blind spot. A candidate is `is_covered` only if it is both inside the
+    camera's FOV cone AND the signal face is oriented toward the camera
+    within `camera.facing_tolerance_deg` (lights with unknown facing_yaw
+    skip the lane-relevance filter too, since it can't be evaluated, and
+    are never excluded by the facing check either).
     """
     if not lanes or not traffic_lights:
         return []
@@ -91,6 +99,13 @@ def run_simulation(
 
             tl_id, signal_type, facing_yaw, tl_pos = tl_targets[j]
             cam_pos = cam_positions[i]
+
+            if facing_yaw is not None and not check_light_relevant_to_lane(
+                tl_facing_yaw=facing_yaw,
+                lane_heading=yaw_cache[i],
+                threshold_deg=LANE_DIRECTION_THRESHOLD_DEG,
+            ):
+                continue
 
             in_fov = check_fov_inclusion(
                 cam_pos=cam_pos,

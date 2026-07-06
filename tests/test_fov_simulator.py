@@ -56,19 +56,33 @@ def test_run_simulation_marks_covered_only_when_in_fov_and_facing_camera():
     assert covered
     assert any(r.is_covered for r in covered)
 
-    # same position, but facing the other way (0deg) -- geometrically in FOV,
-    # but its face points away from the approaching camera.
-    facing_away = TrafficLight(
-        id="facing-away", bulbs=[Point3D(100.0, 0.0, 5.0)], signal_type="vehicle", facing_yaw=0.0
+    # same position, facing_yaw=120deg: still >90deg from the lane's 0deg
+    # heading (i.e. still plausibly meant for this lane, not the opposing
+    # one) but past the default 45deg facing_tolerance_deg of straight-on
+    # -> geometrically in FOV, but too far off-axis to read.
+    facing_off_tolerance = TrafficLight(
+        id="facing-off-tolerance", bulbs=[Point3D(100.0, 0.0, 5.0)], signal_type="vehicle", facing_yaw=120.0
     )
-    results_away = run_simulation([STRAIGHT_LANE], [facing_away])
-    away = [r for r in results_away if r.target_tl_id == "facing-away"]
-    assert away
-    assert all(not r.is_covered for r in away)
-    assert any(r.in_fov and not r.facing_camera for r in away)
+    results_off = run_simulation([STRAIGHT_LANE], [facing_off_tolerance])
+    off = [r for r in results_off if r.target_tl_id == "facing-off-tolerance"]
+    assert off
+    assert all(not r.is_covered for r in off)
+    assert any(r.in_fov and not r.facing_camera for r in off)
 
 
-def test_run_simulation_unknown_facing_yaw_never_blocks_coverage():
+def test_run_simulation_excludes_lights_facing_same_direction_as_lane():
+    # facing_yaw=0deg matches the lane's own 0deg heading exactly -- this
+    # light shines the same way the lane travels, i.e. it belongs to a
+    # parallel lane going the opposite direction at the same location, not
+    # this one. It should be skipped entirely, not merely marked uncovered.
+    facing_same_way = TrafficLight(
+        id="belongs-to-other-direction", bulbs=[Point3D(100.0, 0.0, 5.0)], signal_type="vehicle", facing_yaw=0.0
+    )
+    results = run_simulation([STRAIGHT_LANE], [facing_same_way])
+    assert results == []
+
+
+def test_run_simulation_unknown_facing_yaw_never_blocks_coverage_or_relevance():
     tl = TrafficLight(id="unknown-facing", bulbs=[Point3D(100.0, 0.0, 5.0)], signal_type="vehicle", facing_yaw=None)
     results = run_simulation([STRAIGHT_LANE], [tl])
     assert results
