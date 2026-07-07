@@ -5,7 +5,7 @@ so the parsing logic can be exercised in isolation, per the spec's
 
 import pytest
 
-from map_parser import parse_lanes, parse_latlon_transform, parse_nodes, parse_traffic_lights
+from map_parser import parse_lanes, parse_latlon_transform, parse_nodes, parse_signal_heads, parse_traffic_lights
 from models import Point3D
 
 MOCK_XML = """<?xml version="1.0" encoding="UTF-8"?>
@@ -255,6 +255,31 @@ def test_parse_traffic_lights_lamps_carry_arrow_tag():
     tl = parse_traffic_lights(xml, nodes)[0]
     assert tl.lamps[1].color == "green"
     assert tl.lamps[1].arrow == "right"
+
+
+def test_parse_signal_heads_one_record_per_light_bulbs_way():
+    nodes = parse_nodes(MOCK_XML)
+    heads = parse_signal_heads(MOCK_XML, nodes)
+    assert len(heads) == 1
+    head = heads[0]
+    assert head["way_id"] == "200"
+    assert head["relation_id"] == "900"
+    assert head["signal_type"] == "vehicle"
+    # panel resolved via the bulb way's traffic_light_id tag (way 201)
+    assert head["panel_width"] == pytest.approx(1.25)
+    assert head["panel_height"] == pytest.approx(0.45)
+    # centroid of bulbs 10 (150, 202) and 11 (150.5, 202)
+    assert head["x"] == pytest.approx(150.25)
+    assert head["y"] == pytest.approx(202.0)
+    assert [lamp["color"] for lamp in head["lamps"]] == ["red", "yellow"]
+
+
+def test_parse_signal_heads_falls_back_to_first_refers_without_traffic_light_id():
+    xml = MOCK_XML.replace('<tag k="traffic_light_id" v="201"/>', "")
+    nodes = parse_nodes(xml)
+    heads = parse_signal_heads(xml, nodes)
+    assert heads[0]["panel_width"] == pytest.approx(1.25)
+    assert heads[0]["signal_type"] == "vehicle"
 
 
 def test_parse_traffic_lights_ignores_non_traffic_light_relations():

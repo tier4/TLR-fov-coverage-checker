@@ -39,40 +39,70 @@
     </section>
 
     <section id="detail-pane">
-      <div class="pane-title">
-        Camera view at selected point (through the windshield: L = vehicle's
-        left) &mdash; drag to pan, scroll to zoom, double-click to reset. The
-        dashed rectangle is the FOV at its true aspect ratio; the blue line
-        is the horizon (camera is level, pitch 0). Each light's translucent
-        box is its apparent size at that distance, using the housing
-        dimensions recorded in the map itself; nearer drawn on top.
-        "covered" is this one light's own status; "group covered" is true if
-        any light sharing its stop line is visible (redundant heads only
-        need one to count).
+      <div id="detail-tabs">
+        <button class="tab-btn active" data-tab="camera" type="button">Camera view</button>
+        <button class="tab-btn" data-tab="patterns" type="button">Signal patterns</button>
       </div>
-      <canvas id="frame-canvas"></canvas>
-      <div id="point-info-row">
-        <div id="point-info">Select a point on the map.</div>
-        <a id="gmap-link" target="_blank" rel="noopener" hidden>Google Maps</a>
-        <a id="streetview-link" target="_blank" rel="noopener" hidden>Street View</a>
-        <button id="copy-link-btn" type="button" disabled>Copy link to this point</button>
+
+      <div id="tab-camera" class="tab-content">
+        <div class="pane-title">
+          Camera view at selected point (through the windshield: L = vehicle's
+          left) &mdash; drag to pan, scroll to zoom, double-click to reset. The
+          dashed rectangle is the FOV at its true aspect ratio; the blue line
+          is the horizon (camera is level, pitch 0). Each light's translucent
+          box is its apparent size at that distance, using the housing
+          dimensions recorded in the map itself; nearer drawn on top.
+          "covered" is this one light's own status; "group covered" is true if
+          any light sharing its stop line is visible (redundant heads only
+          need one to count).
+        </div>
+        <canvas id="frame-canvas"></canvas>
+        <div id="point-info-row">
+          <div id="point-info">Select a point on the map.</div>
+          <a id="gmap-link" target="_blank" rel="noopener" hidden>Google Maps</a>
+          <a id="streetview-link" target="_blank" rel="noopener" hidden>Street View</a>
+          <button id="copy-link-btn" type="button" disabled>Copy link to this point</button>
+        </div>
+        <table id="candidate-table">
+          <thead>
+            <tr>
+              <th>light</th>
+              <th>type</th>
+              <th>dist [m]</th>
+              <th>yaw&Delta; [deg]</th>
+              <th>pitch&Delta; [deg]</th>
+              <th>in FOV</th>
+              <th>facing cam</th>
+              <th>covered</th>
+              <th>group covered</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
       </div>
-      <table id="candidate-table">
-        <thead>
-          <tr>
-            <th>light</th>
-            <th>type</th>
-            <th>dist [m]</th>
-            <th>yaw&Delta; [deg]</th>
-            <th>pitch&Delta; [deg]</th>
-            <th>in FOV</th>
-            <th>facing cam</th>
-            <th>covered</th>
-            <th>group covered</th>
-          </tr>
-        </thead>
-        <tbody></tbody>
-      </table>
+
+      <div id="tab-patterns" class="tab-content" hidden>
+        <div class="pane-title">
+          Every physical signal head in the map, grouped by lamp pattern
+          (plain lenses + arrow directions + housing orientation). Click a
+          row to highlight those heads on the map; click it again to clear.
+        </div>
+        <div id="pattern-controls" class="controls">
+          <input id="pattern-filter" type="search" placeholder="filter: e.g. arrows, vertical, pedestrian" />
+          <span id="pattern-summary"></span>
+        </div>
+        <table id="pattern-table">
+          <thead>
+            <tr>
+              <th>lamps</th>
+              <th>pattern</th>
+              <th>count</th>
+            </tr>
+          </thead>
+          <tbody></tbody>
+        </table>
+      </div>
+
       <div id="data-controls">
         <span class="data-label">Data:</span>
         <a href="/api/export" download>Save results (.json.gz)</a>

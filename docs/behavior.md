@@ -654,6 +654,45 @@ made for that centroid rather than per head. Splitting per-head (the
 simulation-semantics change, not just cosmetics -- left as known future
 work.
 
+## Signal pattern catalog, and how the UI absorbed a second task
+
+Once the lamp-level data was in hand, the natural next ask was an
+inventory: search and count the lamp patterns present in the map, as a
+checklist for what a recognition model must handle. The design worry was
+UI sprawl -- the viewer was built around one task (click a waypoint,
+inspect what the camera sees) and this is a different task (browse the
+signal *population*).
+
+Resolution (user picked from options): the map pane is shared by both
+tasks -- "where do I drive" in one, "where are these signals" in the
+other -- so it stays put; the right pane, which was entirely
+inspect-specific, became tabs ("Camera view" / "Signal patterns"). The
+patterns tab is a table of canonical signatures with counts and a text
+filter; clicking a row rings every matching head on the map in magenta.
+The rings draw only while the patterns tab is active, so the two
+highlight vocabularies (candidate status colors vs. pattern membership)
+never appear simultaneously.
+
+Aggregation decisions worth remembering:
+
+- **Per physical head** (`light_bulbs` way, via `parse_signal_heads`),
+  not per regulatory element: the head is the unit a recognizer sees. A
+  relation bundling two identical housings counts twice. Each head's
+  panel is resolved through the bulb way's `traffic_light_id`
+  back-reference (exact even when one relation bundles
+  differently-sized housings), falling back to the relation's first
+  `refers` if untagged.
+- **Signature = type | orientation | plain colors | arrow directions.**
+  Bulb order within the way is deliberately ignored (canonical G/Y/R
+  and left/up/straight/right ordering) so two identical housings
+  digitized in opposite directions count as one pattern. Panel size is
+  deliberately *excluded*: real installations vary by a few cm
+  (1.04-1.34m for the same nominal housing), which would fragment the
+  counts into near-duplicates. Orientation (horizontal/vertical, from
+  the panel's aspect ratio) is included because it's a genuine
+  appearance class -- the six vertical snow-region housings surface as
+  their own rows.
+
 The housing sizes were initially stated assumptions -- until the user
 pointed out the map itself carries them, which checked out completely:
 the `refers` panel way is a linestring spanning the housing's physical

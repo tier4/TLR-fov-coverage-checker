@@ -120,6 +120,95 @@ header h1 {
   color: #555;
 }
 
+#detail-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.tab-btn {
+  padding: 6px 14px;
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: 6px 6px 0 0;
+  background: #eee;
+  cursor: pointer;
+  font-size: 0.85rem;
+  color: #555;
+}
+
+.tab-btn.active {
+  background: white;
+  color: #111;
+  font-weight: 600;
+  position: relative;
+  top: 1px;
+}
+
+#pattern-controls {
+  margin: 6px 0;
+}
+
+#pattern-filter {
+  flex: 1;
+  max-width: 340px;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 0.85rem;
+}
+
+#pattern-summary {
+  color: #555;
+  font-size: 0.8rem;
+}
+
+#pattern-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.85rem;
+}
+
+#pattern-table th, #pattern-table td {
+  border: 1px solid var(--border);
+  padding: 4px 8px;
+  text-align: left;
+}
+
+#pattern-table th {
+  background: #f4f4f4;
+}
+
+#pattern-table tbody tr {
+  cursor: pointer;
+}
+
+#pattern-table tbody tr:hover {
+  background: #f0f6ff;
+}
+
+#pattern-table tbody tr.selected {
+  background: #e2eeff;
+  outline: 2px solid #d033ff;
+  outline-offset: -2px;
+}
+
+.lamp-dot {
+  display: inline-block;
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  border: 1px solid #333;
+  margin-right: 2px;
+  vertical-align: middle;
+  text-align: center;
+  font-size: 9px;
+  line-height: 12px;
+  color: #111;
+  font-weight: bold;
+}
+
 main {
   display: flex;
   height: calc(100vh - 64px);

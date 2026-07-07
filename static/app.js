@@ -54,6 +54,12 @@ const streetviewLink = document.getElementById("streetview-link");
 const loadSnapshotInput = document.getElementById("load-snapshot-input");
 const loadMapInput = document.getElementById("load-map-input");
 const dataStatusEl = document.getElementById("data-status");
+const tabButtons = document.querySelectorAll(".tab-btn");
+const tabCamera = document.getElementById("tab-camera");
+const tabPatterns = document.getElementById("tab-patterns");
+const patternFilterInput = document.getElementById("pattern-filter");
+const patternSummaryEl = document.getElementById("pattern-summary");
+const patternTbody = document.querySelector("#pattern-table tbody");
 
 let points = [];
 let trafficLights = [];
@@ -66,6 +72,11 @@ let latlonTransform = null;
 // target_tl_id -> status color, for whichever point is currently selected
 let highlightedLights = new Map();
 let pointSizeScale = 1.0;
+// right-pane tab state + pattern catalog (fetched lazily on first open)
+let activeTab = "camera";
+let patternsData = null;
+let selectedPatternSig = null;
+let patternHighlightHeads = [];
 
 function worldToLatLon(x, y) {
   if (!latlonTransform) return null;
@@ -179,6 +190,9 @@ const frameView = { zoom: 1, panX: 0, panY: 0 };
 function resizeCanvases() {
   for (const c of [mapCanvas, frameCanvas]) {
     const rect = c.getBoundingClientRect();
+    // a canvas inside a hidden tab measures 0x0 -- keep its previous
+    // pixel buffer instead of wiping it, and fix it up on tab switch
+    if (rect.width === 0 || rect.height === 0) continue;
     c.width = rect.width * devicePixelRatio;
     c.height = rect.height * devicePixelRatio;
   }
@@ -347,6 +361,21 @@ function renderMap() {
     const [sx, sy] = worldToScreen(tl.x, tl.y);
     const color = highlightedLights.get(tl.id);
     drawLightMarker(ctx, sx, sy, highlightR, tl.facing_yaw, color, "black", 2.2);
+  }
+
+  // pattern-catalog highlight: magenta rings around every head matching
+  // the selected pattern row, drawn only while the Patterns tab is open
+  // so the two highlight vocabularies never mix on screen
+  if (activeTab === "patterns" && patternHighlightHeads.length) {
+    ctx.strokeStyle = "#d033ff";
+    ctx.lineWidth = 2.5;
+    const ringR = Math.max(7, markerR * 2);
+    for (const head of patternHighlightHeads) {
+      const [sx, sy] = worldToScreen(head.x, head.y);
+      ctx.beginPath();
+      ctx.arc(sx, sy, ringR, 0, 2 * Math.PI);
+      ctx.stroke();
+    }
   }
 
   if (selectedPointId !== null) {
@@ -701,6 +730,95 @@ function setupFrameInteraction() {
   });
 }
 
+const ARROW_CHAR = { left: "←", up: "↑", straight: "↑", right: "→" };
+const LAMP_SWATCH_ORDER = { green: 0, yellow: 1, red: 2 };
+const ARROW_SWATCH_ORDER = { left: 0, up: 1, straight: 2, right: 3 };
+
+function setupTabs() {
+  for (const btn of tabButtons) {
+    btn.addEventListener("click", () => {
+      activeTab = btn.dataset.tab;
+      for (const b of tabButtons) b.classList.toggle("active", b === btn);
+      tabCamera.hidden = activeTab !== "camera";
+      tabPatterns.hidden = activeTab !== "patterns";
+      if (activeTab === "patterns" && patternsData === null) loadPatterns();
+      if (activeTab === "camera") {
+        // canvas may have missed a window resize while its tab was hidden
+        resizeCanvases();
+        if (currentDetail) renderFrame(currentDetail);
+      }
+      renderMap(); // pattern highlight is drawn only while its tab is active
+    });
+  }
+  patternFilterInput.addEventListener("input", () => renderPatternTable());
+}
+
+async function loadPatterns() {
+  const res = await fetch("/api/patterns");
+  if (!res.ok) {
+    patternSummaryEl.textContent = `failed to load patterns (${res.status})`;
+    return;
+  }
+  patternsData = await res.json();
+  renderPatternTable();
+}
+
+function lampSwatchHtml(heads) {
+  // representative head, lamps in canonical G/Y/R + arrow order (same
+  // ordering the signature uses, so the swatch matches the text)
+  const lamps = [...heads[0].lamps].sort((a, b) => {
+    if (!!a.arrow !== !!b.arrow) return a.arrow ? 1 : -1;
+    if (a.arrow && b.arrow) return (ARROW_SWATCH_ORDER[a.arrow] ?? 9) - (ARROW_SWATCH_ORDER[b.arrow] ?? 9);
+    return (LAMP_SWATCH_ORDER[a.color] ?? 9) - (LAMP_SWATCH_ORDER[b.color] ?? 9);
+  });
+  return lamps
+    .map((lamp) => {
+      const color = LAMP_COLOR[lamp.color] || "#999";
+      const glyph = lamp.arrow ? ARROW_CHAR[lamp.arrow] || "?" : "";
+      return `<span class="lamp-dot" style="background:${color}">${glyph}</span>`;
+    })
+    .join("");
+}
+
+function renderPatternTable() {
+  if (!patternsData) return;
+  const filter = patternFilterInput.value.trim().toLowerCase();
+  const rows = patternsData.patterns.filter((p) => !filter || p.signature.toLowerCase().includes(filter));
+
+  patternTbody.innerHTML = "";
+  let shownHeads = 0;
+  for (const p of rows) {
+    shownHeads += p.count;
+    const tr = document.createElement("tr");
+    if (p.signature === selectedPatternSig) tr.classList.add("selected");
+
+    const swatchTd = document.createElement("td");
+    swatchTd.innerHTML = lampSwatchHtml(p.heads);
+    const sigTd = document.createElement("td");
+    sigTd.textContent = p.signature;
+    const countTd = document.createElement("td");
+    countTd.textContent = p.count;
+    tr.append(swatchTd, sigTd, countTd);
+
+    tr.addEventListener("click", () => {
+      if (selectedPatternSig === p.signature) {
+        selectedPatternSig = null;
+        patternHighlightHeads = [];
+      } else {
+        selectedPatternSig = p.signature;
+        patternHighlightHeads = p.heads;
+      }
+      renderPatternTable();
+      renderMap();
+    });
+    patternTbody.appendChild(tr);
+  }
+
+  const totalNote = filter ? `${shownHeads} of ${patternsData.total_heads} heads shown` : `${patternsData.total_heads} heads`;
+  patternSummaryEl.textContent = `${rows.length} pattern(s) | ${totalNote}` +
+    (selectedPatternSig ? " | highlighted on map" : "");
+}
+
 function setupDataControls() {
   // Both uploads send the file as the raw request body and reload the page
   // on success -- state on the server is fully replaced, so re-fetching
@@ -779,6 +897,7 @@ async function main() {
     setupFrameInteraction();
     setupCopyLinkButton();
     setupDataControls();
+    setupTabs();
     pointSizeInput.addEventListener("input", () => {
       pointSizeScale = parseFloat(pointSizeInput.value);
       pointSizeValueEl.textContent = `${pointSizeScale.toFixed(2)}x`;

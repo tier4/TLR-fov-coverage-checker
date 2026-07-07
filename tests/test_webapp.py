@@ -264,6 +264,40 @@ def test_point_candidates_include_projected_lamps(client):
     assert pitches[0] > pitches[1]
 
 
+def test_patterns_endpoint_aggregates_by_head_signature(client):
+    data = client.get("/api/patterns").get_json()
+    assert data["total_heads"] == 1
+    assert len(data["patterns"]) == 1
+    p = data["patterns"][0]
+    # mock head: red+yellow plain lenses, horizontal 1.25x0.45 vehicle panel
+    assert p["signature"] == "vehicle | horizontal | yellow+red"
+    assert p["count"] == 1
+    assert p["heads"][0]["relation_id"] == "900"
+    assert p["heads"][0]["x"] == pytest.approx(150.25)
+
+
+def test_patterns_signature_includes_canonically_ordered_arrows(client):
+    # two arrow lamps tagged out of canonical order must still produce
+    # left-before-right in the signature
+    head = {
+        "signal_type": "vehicle",
+        "panel_width": 1.25,
+        "panel_height": 0.45,
+        "lamps": [
+            {"color": "green", "arrow": "right"},
+            {"color": "red", "arrow": None},
+            {"color": "green", "arrow": "left"},
+            {"color": "green", "arrow": None},
+        ],
+    }
+    assert webapp._head_signature(head) == "vehicle | horizontal | green+red | arrows:left+right"
+
+
+def test_patterns_signature_marks_vertical_housings(client):
+    head = {"signal_type": "vehicle", "panel_width": 0.39, "panel_height": 1.2, "lamps": [{"color": "red", "arrow": None}]}
+    assert webapp._head_signature(head) == "vehicle | vertical | red"
+
+
 def test_meta_includes_latlon_transform(client):
     data = client.get("/api/meta").get_json()
     # MOCK_XML's nodes all carry lat/lon attributes, so a fit must exist

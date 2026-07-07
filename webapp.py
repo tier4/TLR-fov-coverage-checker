@@ -35,7 +35,7 @@ from flask import Flask, Response, abort, jsonify, request
 from config import AppConfig, load_config
 from fov_simulator import SAMPLE_INTERVAL_M, compute_point_status, run_simulation
 from geometry_calculator import calc_camera_frame_offset, calc_centroid, calc_heading_yaw, calc_resample_by_distance
-from map_parser import parse_lanes, parse_latlon_transform, parse_nodes, parse_traffic_lights
+from map_parser import parse_lanes, parse_latlon_transform, parse_nodes, parse_signal_heads, parse_traffic_lights
 from models import CameraSpec, LanePath, Point3D, ValidationResult
 
 HERE = Path(__file__).resolve().parent
@@ -46,7 +46,7 @@ app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="")
 # Populated once by _load_data() or _deserialize_state() before the server
 # starts serving requests.
 _state: dict = {}
-_SNAPSHOT_FORMAT_VERSION = 6  # bumped when tl_lamps was added to the schema
+_SNAPSHOT_FORMAT_VERSION = 7  # bumped when signal_heads was added to the schema
 
 
 def _build_lane_yaw_lookup(lanes: list[LanePath]) -> dict[str, dict[tuple[float, float], float]]:
@@ -97,6 +97,7 @@ def _load_from_xml(xml_string: str, camera: CameraSpec, signal_types: set[str] |
     }
     yaw_lookup = _build_lane_yaw_lookup(lanes)
     latlon_transform = parse_latlon_transform(xml_string)
+    signal_heads = parse_signal_heads(xml_string, nodes)
 
     points: list[dict] = []
     point_key_to_id: dict[tuple[str, float, float], int] = {}
@@ -126,6 +127,7 @@ def _load_from_xml(xml_string: str, camera: CameraSpec, signal_types: set[str] |
         tl_signal_type=tl_signal_type,
         tl_panel_size=tl_panel_size,
         tl_lamps=tl_lamps,
+        signal_heads=signal_heads,
         yaw_lookup=yaw_lookup,
         latlon_transform=latlon_transform,
         lane_count=len(lanes),
@@ -175,6 +177,7 @@ def _serialize_state() -> dict:
         "tl_signal_type": _state["tl_signal_type"],
         "tl_panel_size": _state["tl_panel_size"],
         "tl_lamps": _state["tl_lamps"],
+        "signal_heads": _state["signal_heads"],
         "yaw_lookup": {
             lane_id: [[x, y, yaw] for (x, y), yaw in per_lane.items()]
             for lane_id, per_lane in _state["yaw_lookup"].items()
@@ -200,6 +203,7 @@ def _deserialize_state(data: dict) -> None:
     tl_signal_type = data["tl_signal_type"]
     tl_panel_size = data["tl_panel_size"]
     tl_lamps = data["tl_lamps"]
+    signal_heads = data["signal_heads"]
     yaw_lookup = {
         lane_id: {(x, y): yaw for x, y, yaw in entries} for lane_id, entries in data["yaw_lookup"].items()
     }
@@ -235,6 +239,7 @@ def _deserialize_state(data: dict) -> None:
         tl_signal_type=tl_signal_type,
         tl_panel_size=tl_panel_size,
         tl_lamps=tl_lamps,
+        signal_heads=signal_heads,
         yaw_lookup=yaw_lookup,
         latlon_transform=data["latlon_transform"],
         lane_count=data["lane_count"],
@@ -341,6 +346,71 @@ def meta():
 @app.route("/api/points")
 def points():
     return jsonify(_state["points"])
+
+
+_COLOR_ORDER = {"green": 0, "yellow": 1, "red": 2}
+_ARROW_ORDER = {"left": 0, "up": 1, "straight": 2, "right": 3}
+
+
+def _head_signature(head: dict) -> str:
+    """Canonical, human-readable pattern signature for one physical head.
+
+    Built from what a recognition model has to distinguish: signal type,
+    housing orientation (from the panel's aspect ratio), plain lens colors,
+    and arrow lamps with their directions. Bulb *order within the way* is
+    deliberately ignored (canonical G/Y/R and left/up/straight/right
+    ordering instead), so two identical housings digitized in opposite
+    directions still count as the same pattern. Panel size is left out of
+    the signature -- real widths vary by a few cm per installation, which
+    would fragment the counts into near-duplicates.
+    """
+    plain = sorted(
+        (lamp["color"] or "?") for lamp in head["lamps"] if not lamp["arrow"]
+    )
+    plain.sort(key=lambda c: _COLOR_ORDER.get(c, 9))
+    arrows = sorted(
+        (lamp["arrow"] for lamp in head["lamps"] if lamp["arrow"]),
+        key=lambda a: _ARROW_ORDER.get(a, 9),
+    )
+    w, h = head["panel_width"], head["panel_height"]
+    if w is not None and h is not None:
+        orientation = "vertical" if h > w else "horizontal"
+    else:
+        orientation = "unknown-orientation"
+    parts = [head["signal_type"], orientation, "+".join(plain) if plain else "no-plain-lens"]
+    if arrows:
+        parts.append("arrows:" + "+".join(arrows))
+    return " | ".join(parts)
+
+
+@app.route("/api/patterns")
+def patterns():
+    """The signal-hardware population, aggregated by per-head pattern
+    signature -- 'what must the recognizer be able to see, and how many of
+    each are there'. Heads, not regulatory elements: a relation bundling
+    two identical housings contributes two counts of one pattern.
+    """
+    by_signature: dict[str, dict] = {}
+    for head in _state["signal_heads"]:
+        sig = _head_signature(head)
+        entry = by_signature.setdefault(
+            sig,
+            {"signature": sig, "count": 0, "signal_type": head["signal_type"], "heads": []},
+        )
+        entry["count"] += 1
+        entry["heads"].append(
+            {
+                "way_id": head["way_id"],
+                "relation_id": head["relation_id"],
+                "x": head["x"],
+                "y": head["y"],
+                "panel_width": head["panel_width"],
+                "panel_height": head["panel_height"],
+                "lamps": head["lamps"],
+            }
+        )
+    ordered = sorted(by_signature.values(), key=lambda e: -e["count"])
+    return jsonify({"total_heads": len(_state["signal_heads"]), "patterns": ordered})
 
 
 @app.route("/api/traffic_lights")

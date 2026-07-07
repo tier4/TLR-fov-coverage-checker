@@ -143,6 +143,19 @@ directions are all real map data (see `docs/map_schema.md`); the one
 assumed value is the lens diameter (0.3m, the standard Japanese 300mm
 lens).
 
+**Signal pattern catalog:** the right pane is tabbed -- "Camera view"
+(everything above) and "Signal patterns", a hardware inventory for
+recognition-model validation: every *physical head* (`light_bulbs` way)
+in the map, grouped by a canonical pattern signature (signal type,
+housing orientation, plain lens colors, arrow directions), with counts.
+A text box filters rows (e.g. `arrows`, `vertical`, `pedestrian`), and
+clicking a row highlights every head of that pattern on the map with
+magenta rings (click again to clear; the rings only show while the
+Patterns tab is open, so they never mix with the Camera view's own
+candidate highlighting). Counting is per head, not per regulatory
+element -- a relation bundling two identical housings contributes two --
+because the head is what a recognizer actually has to see.
+
 Available settings (CLI flag / YAML key under `camera:`):
 
 | CLI flag | YAML key | Meaning | Default |

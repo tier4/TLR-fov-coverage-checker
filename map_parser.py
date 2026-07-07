@@ -250,6 +250,90 @@ def parse_traffic_lights(xml_string: str, nodes: dict[str, Point3D]) -> list[Tra
     return traffic_lights
 
 
+def parse_signal_heads(xml_string: str, nodes: dict[str, Point3D]) -> list[dict]:
+    """One record per *physical head* (light_bulbs way), for cataloguing the
+    signal hardware population -- what a recognition model must be able to
+    see -- as opposed to `parse_traffic_lights`, which pools all heads of a
+    regulatory element into one logical signal for the coverage simulation.
+
+    Each head is matched to its own panel way via the bulb way's
+    `traffic_light_id` back-reference (consistent on every tagged head of
+    the bundled map; falls back to the relation's first `refers` member if
+    the tag is absent), so per-head width/height/subtype are exact even
+    when a relation bundles differently-sized housings.
+
+    Returns dicts: {"way_id", "relation_id", "signal_type",
+    "panel_width", "panel_height", "x", "y",
+    "lamps": [{"color", "arrow"}, ...]}.
+    """
+    root = ET.fromstring(xml_string)
+    ways = _parse_ways(root)
+    way_elems = _index_way_elements(root)
+    node_elems = {n.get("id"): n for n in root.findall("node") if n.get("id") is not None}
+
+    heads: list[dict] = []
+    for rel_elem in root.findall("relation"):
+        if _get_tag(rel_elem, "subtype") != "traffic_light":
+            continue
+        rel_id = rel_elem.get("id")
+        if rel_id is None:
+            continue
+        first_refers = next(
+            (m.get("ref") for m in rel_elem.findall("member") if m.get("role") == "refers"), None
+        )
+        for member in rel_elem.findall("member"):
+            if member.get("role") != "light_bulbs":
+                continue
+            way_id = member.get("ref")
+            bulb_node_ids = [n for n in ways.get(way_id, []) if n in nodes]
+            if not bulb_node_ids:
+                continue
+
+            lamps = []
+            for node_id in bulb_node_ids:
+                node_elem = node_elems.get(node_id)
+                lamps.append(
+                    {
+                        "color": _get_tag(node_elem, "color") if node_elem is not None else None,
+                        "arrow": _get_tag(node_elem, "arrow") if node_elem is not None else None,
+                    }
+                )
+            centroid = calc_centroid([nodes[n] for n in bulb_node_ids])
+
+            bulb_way_elem = way_elems.get(way_id)
+            panel_ref = _get_tag(bulb_way_elem, "traffic_light_id") if bulb_way_elem is not None else None
+            if panel_ref is None:
+                panel_ref = first_refers
+            panel_elem = way_elems.get(panel_ref) if panel_ref else None
+            signal_type = _classify_signal_type(_get_tag(panel_elem, "subtype") if panel_elem is not None else None)
+            panel_width: float | None = None
+            panel_height: float | None = None
+            if panel_elem is not None:
+                panel_points = [nodes[n] for n in ways.get(panel_ref, []) if n in nodes]
+                if len(panel_points) >= 2:
+                    panel_width = calc_distance_3d(panel_points[0], panel_points[-1])
+                height_tag = _get_tag(panel_elem, "height")
+                if height_tag is not None:
+                    try:
+                        panel_height = float(height_tag)
+                    except ValueError:
+                        pass
+
+            heads.append(
+                {
+                    "way_id": way_id,
+                    "relation_id": rel_id,
+                    "signal_type": signal_type,
+                    "panel_width": panel_width,
+                    "panel_height": panel_height,
+                    "x": centroid.x,
+                    "y": centroid.y,
+                    "lamps": lamps,
+                }
+            )
+    return heads
+
+
 def parse_lanes(xml_string: str, nodes: dict[str, Point3D]) -> list[LanePath]:
     """Build one LanePath per `type=lanelet subtype=road` relation, center-lined via Module A.
 
