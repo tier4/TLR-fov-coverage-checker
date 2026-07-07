@@ -26,15 +26,16 @@ from __future__ import annotations
 import argparse
 import gzip
 import json
+import xml.etree.ElementTree as ET
 from dataclasses import replace
 from pathlib import Path
 
-from flask import Flask, Response, abort, jsonify
+from flask import Flask, Response, abort, jsonify, request
 
 from config import AppConfig, load_config
 from fov_simulator import SAMPLE_INTERVAL_M, compute_point_status, run_simulation
 from geometry_calculator import calc_camera_frame_offset, calc_centroid, calc_heading_yaw, calc_resample_by_distance
-from map_parser import parse_lanes, parse_nodes, parse_traffic_lights
+from map_parser import parse_lanes, parse_latlon_transform, parse_nodes, parse_traffic_lights
 from models import CameraSpec, LanePath, Point3D, ValidationResult
 
 HERE = Path(__file__).resolve().parent
@@ -45,7 +46,7 @@ app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="")
 # Populated once by _load_data() or _deserialize_state() before the server
 # starts serving requests.
 _state: dict = {}
-_SNAPSHOT_FORMAT_VERSION = 3  # bumped when tl_signal_type was added to the schema
+_SNAPSHOT_FORMAT_VERSION = 4  # bumped when latlon_transform + signal_types were added to the schema
 
 
 def _build_lane_yaw_lookup(lanes: list[LanePath]) -> dict[str, dict[tuple[float, float], float]]:
@@ -73,7 +74,10 @@ def _build_lane_yaw_lookup(lanes: list[LanePath]) -> dict[str, dict[tuple[float,
 
 
 def _load_data(map_path: Path, camera: CameraSpec, signal_types: set[str] | None) -> None:
-    xml_string = map_path.read_text(encoding="utf-8")
+    _load_from_xml(map_path.read_text(encoding="utf-8"), camera, signal_types)
+
+
+def _load_from_xml(xml_string: str, camera: CameraSpec, signal_types: set[str] | None) -> None:
     nodes = parse_nodes(xml_string)
     lanes = parse_lanes(xml_string, nodes)
     traffic_lights = parse_traffic_lights(xml_string, nodes)
@@ -83,6 +87,7 @@ def _load_data(map_path: Path, camera: CameraSpec, signal_types: set[str] | None
     tl_facing_yaw = {tl.id: tl.facing_yaw for tl in traffic_lights if tl.bulbs}
     tl_signal_type = {tl.id: tl.signal_type for tl in traffic_lights if tl.bulbs}
     yaw_lookup = _build_lane_yaw_lookup(lanes)
+    latlon_transform = parse_latlon_transform(xml_string)
 
     points: list[dict] = []
     point_key_to_id: dict[tuple[str, float, float], int] = {}
@@ -101,14 +106,17 @@ def _load_data(map_path: Path, camera: CameraSpec, signal_types: set[str] | None
     for p in points:
         p["status"] = compute_point_status(results_by_point[p["id"]])
 
+    _state.clear()
     _state.update(
         camera=camera,
+        signal_types=signal_types,
         points=points,
         results_by_point=results_by_point,
         tl_positions=tl_positions,
         tl_facing_yaw=tl_facing_yaw,
         tl_signal_type=tl_signal_type,
         yaw_lookup=yaw_lookup,
+        latlon_transform=latlon_transform,
         lane_count=len(lanes),
         traffic_light_count=len(traffic_lights),
     )
@@ -120,6 +128,7 @@ def _serialize_state() -> dict:
     source .osm file. `_deserialize_state` is the exact inverse.
     """
     camera: CameraSpec = _state["camera"]
+    signal_types: set[str] | None = _state["signal_types"]
     return {
         "format_version": _SNAPSHOT_FORMAT_VERSION,
         "camera": {
@@ -130,6 +139,8 @@ def _serialize_state() -> dict:
             "max_range": camera.max_range,
             "facing_tolerance_deg": camera.facing_tolerance_deg,
         },
+        "signal_types": sorted(signal_types) if signal_types is not None else None,
+        "latlon_transform": _state["latlon_transform"],
         "lane_count": _state["lane_count"],
         "traffic_light_count": _state["traffic_light_count"],
         "points": _state["points"],
@@ -197,15 +208,18 @@ def _deserialize_state(data: dict) -> None:
             for c in candidates
         ]
 
+    signal_types_list = data["signal_types"]
     _state.clear()
     _state.update(
         camera=camera,
+        signal_types=set(signal_types_list) if signal_types_list is not None else None,
         points=points,
         results_by_point=results_by_point,
         tl_positions=tl_positions,
         tl_facing_yaw=tl_facing_yaw,
         tl_signal_type=tl_signal_type,
         yaw_lookup=yaw_lookup,
+        latlon_transform=data["latlon_transform"],
         lane_count=data["lane_count"],
         traffic_light_count=data["traffic_light_count"],
     )
@@ -249,6 +263,43 @@ def export_results():
     )
 
 
+@app.route("/api/load_snapshot", methods=["POST"])
+def load_snapshot():
+    """Replace the served results with an uploaded snapshot (the request body
+    is the raw .json.gz -- or plain .json -- file, same format as
+    /api/export), so a shared run can be inspected without restarting the
+    server with --load.
+    """
+    raw = request.get_data()
+    try:
+        text = gzip.decompress(raw).decode("utf-8")
+    except OSError:
+        text = raw.decode("utf-8")
+    try:
+        _deserialize_state(json.loads(text))
+    except (ValueError, KeyError, TypeError) as exc:
+        abort(400, description=f"not a valid results snapshot: {exc}")
+    return jsonify({"ok": True, "point_count": len(_state["points"])})
+
+
+@app.route("/api/load_map", methods=["POST"])
+def load_map():
+    """Replace the served results by parsing an uploaded .osm file (raw XML
+    request body) and re-running the simulation with the current camera
+    spec and signal-type filter. Synchronous on purpose -- the run takes
+    ~20-30s on a city-scale map and the frontend just shows a "computing"
+    notice until this returns.
+    """
+    xml_string = request.get_data(as_text=True)
+    camera: CameraSpec = _state["camera"]
+    signal_types: set[str] | None = _state["signal_types"]
+    try:
+        _load_from_xml(xml_string, camera, signal_types)
+    except ET.ParseError as exc:
+        abort(400, description=f"not parseable as OSM XML: {exc}")
+    return jsonify({"ok": True, "point_count": len(_state["points"])})
+
+
 @app.route("/api/meta")
 def meta():
     camera: CameraSpec = _state["camera"]
@@ -265,6 +316,7 @@ def meta():
             "lane_count": _state["lane_count"],
             "traffic_light_count": _state["traffic_light_count"],
             "point_count": len(_state["points"]),
+            "latlon_transform": _state["latlon_transform"],
         }
     )
 

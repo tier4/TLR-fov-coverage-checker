@@ -32,20 +32,24 @@
         <span><i class="dot" style="background:#d62728"></i>out of FOV</span>
         <span><i class="tri" style="border-left-color:gold"></i>vehicle signal</span>
         <span><i class="tri" style="border-left-color:#00bcd4"></i>pedestrian signal</span>
-        <span><i class="dot" style="background:silver;border:1px solid black"></i>direction unknown</span>
+        <span><i class="dot" style="background:silver;border:1px solid black"></i>no stop line in map (direction unknown)</span>
       </div>
     </section>
 
     <section id="detail-pane">
       <div class="pane-title">
-        Camera view at selected point &mdash; drag to pan, scroll to zoom, double-click to reset.
-        "covered" is this one light's own status; "group covered" is true if
-        any light sharing its stop line is visible (redundant heads only
-        need one to count).
+        Camera view at selected point (through the windshield: L = vehicle's
+        left) &mdash; drag to pan, scroll to zoom, double-click to reset. The
+        dashed rectangle is the FOV at its true aspect ratio; the blue line
+        is the horizon (camera is level, pitch 0). "covered" is this one
+        light's own status; "group covered" is true if any light sharing its
+        stop line is visible (redundant heads only need one to count).
       </div>
       <canvas id="frame-canvas"></canvas>
       <div id="point-info-row">
         <div id="point-info">Select a point on the map.</div>
+        <a id="gmap-link" target="_blank" rel="noopener" hidden>Google Maps</a>
+        <a id="streetview-link" target="_blank" rel="noopener" hidden>Street View</a>
         <button id="copy-link-btn" type="button" disabled>Copy link to this point</button>
       </div>
       <table id="candidate-table">
@@ -64,6 +68,13 @@
         </thead>
         <tbody></tbody>
       </table>
+      <div id="data-controls">
+        <span class="data-label">Data:</span>
+        <a href="/api/export" download>Save results (.json.gz)</a>
+        <label class="file-btn">Load results&hellip;<input type="file" id="load-snapshot-input" accept=".gz,.json" hidden></label>
+        <label class="file-btn">Load .osm map&hellip;<input type="file" id="load-map-input" accept=".osm,.xml" hidden></label>
+        <span id="data-status"></span>
+      </div>
     </section>
   </main>
 

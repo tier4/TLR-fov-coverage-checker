@@ -40,6 +40,8 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 
+import numpy as np
+
 from geometry_calculator import calc_center_line, calc_centroid, calc_heading_yaw
 from models import LanePath, Point3D, TrafficLight
 
@@ -100,6 +102,45 @@ def parse_nodes(xml_string: str) -> dict[str, Point3D]:
             continue
         nodes[node_id] = Point3D(x=float(x), y=float(y), z=float(z) if z is not None else 0.0)
     return nodes
+
+
+def parse_latlon_transform(xml_string: str) -> dict[str, list[float]] | None:
+    """Least-squares affine fit from local (x, y) to geographic (lat, lon),
+    sampled from every node carrying both the lat/lon XML attributes and
+    local_x/local_y tags (real Lanelet2 exports store both on each node).
+
+    This is what lets a viewer georeference any local coordinate -- Google
+    Maps links, aerial-imagery underlays -- without dragging in a full
+    projection library: over a city-scale map (a few km) a single affine
+    approximation of the projection is accurate to well under a meter,
+    far tighter than anything a "which intersection is this" link needs.
+
+    Returns {"lat": [a, b, c], "lon": [d, e, f]} such that
+    lat ~= a*x + b*y + c and lon ~= d*x + e*y + f, or None if fewer than
+    3 suitable nodes exist (the fit would be underdetermined).
+    """
+    root = ET.fromstring(xml_string)
+    xs: list[float] = []
+    ys: list[float] = []
+    lats: list[float] = []
+    lons: list[float] = []
+    for node_elem in root.findall("node"):
+        lat = node_elem.get("lat")
+        lon = node_elem.get("lon")
+        x = _get_tag(node_elem, "local_x")
+        y = _get_tag(node_elem, "local_y")
+        if lat is None or lon is None or x is None or y is None:
+            continue
+        xs.append(float(x))
+        ys.append(float(y))
+        lats.append(float(lat))
+        lons.append(float(lon))
+    if len(xs) < 3:
+        return None
+    design = np.column_stack([xs, ys, np.ones(len(xs))])
+    lat_coef, *_ = np.linalg.lstsq(design, np.array(lats), rcond=None)
+    lon_coef, *_ = np.linalg.lstsq(design, np.array(lons), rcond=None)
+    return {"lat": lat_coef.tolist(), "lon": lon_coef.tolist()}
 
 
 def parse_traffic_lights(xml_string: str, nodes: dict[str, Point3D]) -> list[TrafficLight]:

@@ -24,15 +24,29 @@ const candidateTbody = document.querySelector("#candidate-table tbody");
 const pointSizeInput = document.getElementById("point-size");
 const pointSizeValueEl = document.getElementById("point-size-value");
 const copyLinkBtn = document.getElementById("copy-link-btn");
+const gmapLink = document.getElementById("gmap-link");
+const streetviewLink = document.getElementById("streetview-link");
+const loadSnapshotInput = document.getElementById("load-snapshot-input");
+const loadMapInput = document.getElementById("load-map-input");
+const dataStatusEl = document.getElementById("data-status");
 
 let points = [];
 let trafficLights = [];
 let selectedPointId = null;
 let currentDetail = null;
 let cameraSpec = null;
+// {lat: [a,b,c], lon: [d,e,f]} affine fit from /api/meta, or null if the
+// map's nodes carried no lat/lon attributes
+let latlonTransform = null;
 // target_tl_id -> status color, for whichever point is currently selected
 let highlightedLights = new Map();
 let pointSizeScale = 1.0;
+
+function worldToLatLon(x, y) {
+  if (!latlonTransform) return null;
+  const { lat, lon } = latlonTransform;
+  return [lat[0] * x + lat[1] * y + lat[2], lon[0] * x + lon[1] * y + lon[2]];
+}
 
 // world <-> screen transform state for the map pane
 const view = { scale: 1, offsetX: 0, offsetY: 0 };
@@ -304,6 +318,20 @@ function renderPointInfo(detail) {
     `cam_yaw=${detail.cam_yaw.toFixed(1)}deg  |  ` +
     `FOV ${detail.fov_h}x${detail.fov_v} deg  |  ${detail.candidates.length} candidate(s)  |  ` +
     `status=${detail.status}`;
+
+  const ll = worldToLatLon(p.x, p.y);
+  if (ll) {
+    const [lat, lon] = ll;
+    gmapLink.href = `https://www.google.com/maps?q=${lat.toFixed(7)},${lon.toFixed(7)}`;
+    streetviewLink.href =
+      `https://www.google.com/maps/@?api=1&map_action=pano&viewpoint=${lat.toFixed(7)},${lon.toFixed(7)}` +
+      `&heading=${detail.cam_yaw !== null ? (90 - detail.cam_yaw).toFixed(1) : 0}`;
+    gmapLink.hidden = false;
+    streetviewLink.hidden = false;
+  } else {
+    gmapLink.hidden = true;
+    streetviewLink.hidden = true;
+  }
 }
 
 function renderCandidateTable(detail) {
@@ -336,20 +364,39 @@ function renderFrame(detail) {
 
   const w = frameCanvas.width, h = frameCanvas.height;
   const cx = w / 2 + frameView.panX, cy = h / 2 + frameView.panY;
+  const halfH = detail.fov_h / 2, halfV = detail.fov_v / 2;
 
-  // auto-fit the plotted range to whatever is farthest off-axis, at least the FOV itself
-  let maxAbs = 1.0;
+  // Work in degrees with one shared px/deg scale on both axes, so the FOV
+  // rectangle keeps its true aspect ratio (e.g. 30x17 renders wide, not
+  // square the way the old +-1-normalized rendering did).
+  let rangeX = halfH, rangeY = halfV;
   for (const c of detail.candidates) {
-    maxAbs = Math.max(maxAbs, Math.abs(c.norm_x), Math.abs(c.norm_y));
+    rangeX = Math.max(rangeX, Math.abs(c.yaw_diff));
+    rangeY = Math.max(rangeY, Math.abs(c.pitch_diff));
   }
-  const range = Math.max(1.3, maxAbs * 1.2);
-  const scale = (Math.min(w, h) / 2 / range) * frameView.zoom;
+  const pad = 1.2;
+  const pxPerDeg = Math.min(w / (2 * rangeX * pad), h / (2 * rangeY * pad)) * frameView.zoom;
 
-  const toScreen = (nx, ny) => [cx + nx * scale, cy - ny * scale];
+  // This is a view *through the camera*, out the windshield: yaw_diff is
+  // CCW-positive (a target left of the heading has positive yaw_diff), so
+  // positive must render toward the LEFT edge -- hence the minus sign.
+  // Positive pitch_diff (above the horizon) renders up.
+  const toScreen = (yawDeg, pitchDeg) => [cx - yawDeg * pxPerDeg, cy - pitchDeg * pxPerDeg];
 
-  // FOV rectangle (norm range -1..1 on both axes)
-  const [rx0, ry0] = toScreen(-1, 1);
-  const [rx1, ry1] = toScreen(1, -1);
+  // horizon: the camera is level (pitch 0), so eye-height (z = ground +
+  // cam height) maps to a full-width line through pitch_diff = 0.
+  ctx.strokeStyle = "#3a5a8a";
+  ctx.lineWidth = 1;
+  ctx.beginPath();
+  ctx.moveTo(0, cy); ctx.lineTo(w, cy);
+  ctx.stroke();
+  ctx.fillStyle = "#6a8ab8";
+  ctx.font = "10px sans-serif";
+  ctx.fillText("horizon (pitch 0)", 6, cy - 4);
+
+  // FOV rectangle: +-fov_h/2 wide, +-fov_v/2 tall
+  const [rx0, ry0] = toScreen(halfH, halfV);
+  const [rx1, ry1] = toScreen(-halfH, -halfV);
   ctx.strokeStyle = "#888";
   ctx.setLineDash([6, 4]);
   ctx.strokeRect(rx0, ry0, rx1 - rx0, ry1 - ry0);
@@ -366,9 +413,12 @@ function renderFrame(detail) {
   ctx.fillStyle = "#aaa";
   ctx.font = "10px sans-serif";
   ctx.fillText("FOV edge", rx0 + 4, ry0 + 12);
+  // orientation labels so left/right is never ambiguous
+  ctx.fillText("L", rx0 + 4, cy - 6);
+  ctx.fillText("R", rx1 - 12, cy - 6);
 
   for (const c of detail.candidates) {
-    const [sx, sy] = toScreen(c.norm_x, c.norm_y);
+    const [sx, sy] = toScreen(c.yaw_diff, c.pitch_diff);
     const color = c.is_covered ? STATUS_COLOR.covered : c.in_fov ? STATUS_COLOR.facing_away : STATUS_COLOR.out_of_fov;
     ctx.beginPath();
     ctx.arc(sx, sy, 6, 0, 2 * Math.PI);
@@ -460,6 +510,33 @@ function setupFrameInteraction() {
   });
 }
 
+function setupDataControls() {
+  // Both uploads send the file as the raw request body and reload the page
+  // on success -- state on the server is fully replaced, so re-fetching
+  // everything from scratch is both the simplest and the correct behavior.
+  const upload = async (url, file, busyMsg) => {
+    dataStatusEl.textContent = busyMsg;
+    try {
+      const res = await fetch(url, { method: "POST", body: file });
+      if (!res.ok) throw new Error(`${res.status}: ${(await res.text()).slice(0, 200)}`);
+      dataStatusEl.textContent = "done, reloading...";
+      location.reload();
+    } catch (err) {
+      console.error(err);
+      dataStatusEl.textContent = `failed: ${err.message}`;
+    }
+  };
+
+  loadSnapshotInput.addEventListener("change", () => {
+    const file = loadSnapshotInput.files[0];
+    if (file) upload("/api/load_snapshot", file, "loading snapshot...");
+  });
+  loadMapInput.addEventListener("change", () => {
+    const file = loadMapInput.files[0];
+    if (file) upload("/api/load_map", file, "parsing map + running simulation (~30s)...");
+  });
+}
+
 function setupCopyLinkButton() {
   copyLinkBtn.addEventListener("click", async () => {
     const original = "Copy link to this point";
@@ -490,6 +567,7 @@ async function main() {
     points = await pointsRes.json();
     trafficLights = await lightsRes.json();
     cameraSpec = meta.camera;
+    latlonTransform = meta.latlon_transform;
 
     metaEl.textContent =
       `${meta.lane_count} lanes | ${meta.traffic_light_count} traffic lights | ${meta.point_count} evaluated waypoints | ` +
@@ -509,6 +587,7 @@ async function main() {
     setupMapInteraction();
     setupFrameInteraction();
     setupCopyLinkButton();
+    setupDataControls();
     pointSizeInput.addEventListener("input", () => {
       pointSizeScale = parseFloat(pointSizeInput.value);
       pointSizeValueEl.textContent = `${pointSizeScale.toFixed(2)}x`;

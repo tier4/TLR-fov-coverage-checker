@@ -543,3 +543,48 @@ gained a `signal_type` field to drive this (bumped
 `_SNAPSHOT_FORMAT_VERSION` to 3, same reasoning as the `facing_yaw` bump:
 old snapshots should fail loudly on `--load`, not silently render
 everything as "unknown").
+
+## The camera-view panel was horizontally mirrored (and square)
+
+User-reported, and real: the camera-view panel drew a target with
+positive `yaw_diff` on the *right* -- but `yaw_diff` is CCW-positive
+(`target_yaw - cam_yaw` in world coordinates), so a positive value means
+the target is to the vehicle's *left*. Every camera-view render before
+this fix was left-right mirrored relative to what a driver (or the
+camera) would actually see. None of the pass/fail numbers were affected
+-- `check_fov_inclusion` only uses `abs(yaw_diff)` -- but as a "what does
+the camera see" visualization it was wrong in exactly the way that
+quietly builds wrong intuitions. Same render pass also drew the FOV as a
+square: candidate offsets were pre-normalized to +-1 against fov_h/2 and
+fov_v/2 separately and then drawn with one shared pixel scale, so the
+30x17deg FOV rendered 1:1. Both fixed together by rendering in degrees
+with a single px/deg scale (true aspect ratio falls out naturally) and
+negating x (`cx - yaw_diff * pxPerDeg`). Also added: a full-width horizon
+line (the camera is modeled level, pitch 0, so eye-height maps exactly to
+the pitch_diff=0 row), explicit L/R labels inside the FOV rectangle so
+orientation is never ambiguous again, and a wider panel (50% split,
+taller canvas).
+
+## In-browser data controls and Google Maps links
+
+Two workflow additions to the viewer, no simulation-logic changes:
+
+- **Data controls** (bottom of the right pane): "Save results" (the
+  existing `/api/export`), "Load results..." (`POST /api/load_snapshot`,
+  raw .json.gz or .json body -- the browser's file picker, no server
+  restart), and "Load .osm map..." (`POST /api/load_map`, re-parses and
+  re-runs the simulation with the current camera spec/signal filter;
+  synchronous on purpose, the frontend shows a ~30s computing notice).
+  A failed load leaves the previous state serving: `_load_from_xml` only
+  clears `_state` after all parsing has succeeded, and a bad snapshot
+  400s before touching anything.
+- **Georeferencing**: real Lanelet2 nodes carry both lat/lon attributes
+  and local_x/local_y tags, so `parse_latlon_transform` (map_parser.py)
+  least-squares-fits one affine transform local->(lat, lon) per map --
+  accurate to well under a meter at city scale, no projection library
+  needed. Exposed via `/api/meta` and stored in snapshots
+  (`_SNAPSHOT_FORMAT_VERSION` 4). The selected-point row uses it for two
+  links: "Google Maps" (drops a pin at the waypoint) and "Street View"
+  (opens the panorama looking in the direction of travel -- Google's
+  heading parameter is compass-north clockwise, ours is East-CCW, hence
+  `heading = 90 - cam_yaw`).

@@ -5,7 +5,7 @@ so the parsing logic can be exercised in isolation, per the spec's
 
 import pytest
 
-from map_parser import parse_lanes, parse_nodes, parse_traffic_lights
+from map_parser import parse_lanes, parse_latlon_transform, parse_nodes, parse_traffic_lights
 from models import Point3D
 
 MOCK_XML = """<?xml version="1.0" encoding="UTF-8"?>
@@ -278,3 +278,30 @@ def test_parse_lanes_ignores_non_traffic_light_regulatory_elements():
     nodes = parse_nodes(xml)
     lanes = {lane.id: lane for lane in parse_lanes(xml, nodes)}
     assert lanes["101"].direct_tl_ids == []
+
+
+# Exact affine relationship: lat = 35 + 9e-6 * y, lon = 139 + 1.1e-5 * x --
+# the least-squares fit must recover it (and thus predict unseen points).
+LATLON_MOCK_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<osm generator="test">
+  <node id="1" lat="35.0" lon="139.0"><tag k="local_x" v="0.0"/><tag k="local_y" v="0.0"/></node>
+  <node id="2" lat="35.0009" lon="139.0"><tag k="local_x" v="0.0"/><tag k="local_y" v="100.0"/></node>
+  <node id="3" lat="35.0" lon="139.0011"><tag k="local_x" v="100.0"/><tag k="local_y" v="0.0"/></node>
+  <node id="4" lat="35.0009" lon="139.0011"><tag k="local_x" v="100.0"/><tag k="local_y" v="100.0"/></node>
+</osm>
+"""
+
+
+def test_parse_latlon_transform_recovers_affine_mapping():
+    transform = parse_latlon_transform(LATLON_MOCK_XML)
+    assert transform is not None
+    a, b, c = transform["lat"]
+    d, e, f = transform["lon"]
+    x, y = 50.0, 25.0  # not one of the fitted sample points
+    assert a * x + b * y + c == pytest.approx(35.0 + 9e-6 * 25.0, abs=1e-9)
+    assert d * x + e * y + f == pytest.approx(139.0 + 1.1e-5 * 50.0, abs=1e-9)
+
+
+def test_parse_latlon_transform_none_without_latlon_attributes():
+    # TOPOLOGY_MOCK_XML's nodes carry only local_x/local_y, no lat/lon attrs
+    assert parse_latlon_transform(TOPOLOGY_MOCK_XML) is None

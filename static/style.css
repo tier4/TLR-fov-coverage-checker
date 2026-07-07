@@ -78,6 +78,48 @@ header h1 {
   border-color: var(--covered);
 }
 
+#gmap-link, #streetview-link {
+  font-size: 0.78rem;
+  color: #1f77b4;
+  white-space: nowrap;
+}
+
+#data-controls {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 12px;
+  padding-top: 8px;
+  border-top: 1px solid var(--border);
+  font-size: 0.8rem;
+}
+
+#data-controls .data-label {
+  color: #555;
+  font-weight: 600;
+}
+
+#data-controls a {
+  color: #1f77b4;
+}
+
+.file-btn {
+  padding: 3px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: white;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.file-btn:hover {
+  background: #f0f0f0;
+}
+
+#data-status {
+  color: #555;
+}
+
 main {
   display: flex;
   height: calc(100vh - 64px);
@@ -90,14 +132,14 @@ main {
 }
 
 #map-pane {
-  flex: 3;
+  flex: 1;
   border-right: 1px solid var(--border);
   position: relative;
 }
 
 #detail-pane {
-  flex: 2;
-  min-width: 360px;
+  flex: 1;
+  min-width: 420px;
   overflow-y: auto;
 }
 
@@ -134,7 +176,7 @@ main {
 
 #frame-canvas {
   width: 100%;
-  height: 280px;
+  height: 360px;
   background: #111;
   border: 1px solid var(--border);
 }

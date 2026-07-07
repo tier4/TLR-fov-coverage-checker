@@ -97,7 +97,24 @@ python3 webapp.py --load run1.json.gz
 
 A running instance can also be exported on demand via the "Download
 results" link in the header (`GET /api/export`), without needing a
-`--save` flag or a server restart.
+`--save` flag or a server restart. The "Data:" row under the candidate
+table does the same jobs without touching the terminal at all: save the
+current results, load a previously saved `.json.gz`/`.json` snapshot
+(`POST /api/load_snapshot`), or pick a different `.osm` file and re-run
+the simulation on it with the current camera spec (`POST /api/load_map`,
+takes ~30s).
+
+**Google Maps / Street View:** the selected-point row links straight to
+the same location in Google Maps (pin at the waypoint) and Street View
+(panorama looking in the direction of travel). Coordinates come from a
+per-map affine fit between the nodes' `local_x`/`local_y` tags and their
+`lat`/`lon` attributes (`parse_latlon_transform`) -- accurate to well
+under a meter at city scale.
+
+The camera-view panel renders through the windshield: L is the vehicle's
+left, the dashed FOV rectangle keeps its true `fov_h x fov_v` aspect
+ratio, and the blue line is the horizon (the camera is modeled level,
+pitch 0).
 
 Available settings (CLI flag / YAML key under `camera:`):
 

@@ -227,3 +227,49 @@ def test_read_snapshot_also_accepts_uncompressed_json(tmp_path, client):
     snapshot_path.write_text(json.dumps(original), encoding="utf-8")
 
     assert webapp._read_snapshot(snapshot_path) == original
+
+
+def test_meta_includes_latlon_transform(client):
+    data = client.get("/api/meta").get_json()
+    # MOCK_XML's nodes all carry lat/lon attributes, so a fit must exist
+    assert data["latlon_transform"] is not None
+    assert set(data["latlon_transform"].keys()) == {"lat", "lon"}
+    assert len(data["latlon_transform"]["lat"]) == 3
+
+
+def test_load_snapshot_route_replaces_state(client):
+    snapshot = webapp._serialize_state()
+    before = client.get("/api/points/0/candidates").get_json()
+
+    raw = gzip.compress(json.dumps(snapshot).encode("utf-8"))
+    res = client.post("/api/load_snapshot", data=raw)
+    assert res.status_code == 200
+    assert res.get_json()["ok"] is True
+
+    assert client.get("/api/points/0/candidates").get_json() == before
+
+
+def test_load_snapshot_route_rejects_garbage(client):
+    res = client.post("/api/load_snapshot", data=b"not json at all")
+    assert res.status_code == 400
+
+
+def test_load_snapshot_route_rejects_wrong_format_version(client):
+    snapshot = webapp._serialize_state()
+    snapshot["format_version"] = 999
+    res = client.post("/api/load_snapshot", data=json.dumps(snapshot).encode("utf-8"))
+    assert res.status_code == 400
+
+
+def test_load_map_route_reruns_simulation(client):
+    before = client.get("/api/meta").get_json()
+    res = client.post("/api/load_map", data=MOCK_XML.encode("utf-8"))
+    assert res.status_code == 200
+    assert res.get_json()["ok"] is True
+    # same map + same camera spec -> identical result set
+    assert client.get("/api/meta").get_json() == before
+
+
+def test_load_map_route_rejects_non_xml(client):
+    res = client.post("/api/load_map", data=b"definitely not xml")
+    assert res.status_code == 400
