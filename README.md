@@ -86,15 +86,28 @@ For every 1m waypoint on every lane, a camera at `point.z + camera.height`
 looks toward the next waypoint (`cam_yaw`, pitch fixed at 0) and is checked
 against every traffic light within range.
 
-Before that per-waypoint check runs, a light is skipped for a lane
-entirely if it doesn't plausibly belong to that lane's direction of
-travel -- opposite-direction lanelets on the same physical road are only
-a few meters apart, so without this a light meant for northbound traffic
-would also get scored (as a blind spot) against the adjacent southbound
-lane it was never meant to regulate:
+Before that per-waypoint check runs, two pre-filters decide whether a
+light is even a candidate for this lane at all.
+
+**Which lane a light belongs to** is decided by the map itself wherever
+possible, not by geometry: `parse_lanes` reads each lanelet's own
+`regulatory_element` reference (`LanePath.direct_tl_ids`) -- the map
+author's explicit statement of which signal(s) control that lane. Only
+~20% of lanelets carry this directly (typically just the one immediately
+approaching a stop line), so `_build_lane_relevant_tl_ids`
+(`fov_simulator.py`) walks forward through `next_lane_ids` (lanelets
+connected via shared boundary endpoints) to inherit a reference from a
+downstream lanelet within `camera.max_range`, recovering an answer for
+51.7% of lanelets on the bundled map. Only when neither is available does
+it fall back to a geometric heuristic (facing_yaw vs. lane heading), which
+a skewed (non-square) intersection can fool -- a cross-street signal can
+end up "more than 90 degrees" off a lane's heading by coincidence and get
+treated as relevant when it has nothing to do with that lane:
 
 ```
-Plan view: a light only belongs to the direction it faces
+Plan view: a light only belongs to the direction it faces (fallback only --
+see docs/behavior.md for why the map's own regulatory_element reference is
+used first)
 ==========================================================
 
         northbound lane  ->  o->  o->  o->  o->  *  (light facing south,
@@ -191,14 +204,19 @@ Side view, same waypoint (vertical FOV / pitch check)
 ```
 
 `check_fov_inclusion`, `check_light_facing_camera`,
-`check_light_relevant_to_lane`, `check_target_ahead` and `calc_heading_yaw`
-in `geometry_calculator.py` implement exactly this, and are pure functions --
-see their docstrings and `tests/test_geometry_calculator.py` for the
-boundary cases (e.g. a target exactly on the fov_h/2 edge, or a light
-exactly on the 90-degree relevance/ahead threshold). `calc_camera_frame_offset`
-exposes the same yaw/pitch-diff geometry as a raw offset instead of a
-boolean, which is what the interactive viewer (`webapp.py`) uses to place
-each candidate light inside its FOV-rectangle rendering.
+`check_light_relevant_to_lane` (fallback only), `check_target_ahead` and
+`calc_heading_yaw` in `geometry_calculator.py` implement exactly this, and
+are pure functions -- see their docstrings and
+`tests/test_geometry_calculator.py` for the boundary cases (e.g. a target
+exactly on the fov_h/2 edge, or a light exactly on the 90-degree
+relevance/ahead threshold). `calc_camera_frame_offset` exposes the same
+yaw/pitch-diff geometry as a raw offset instead of a boolean, which is
+what the interactive viewer (`webapp.py`) uses to place each candidate
+light inside its FOV-rectangle rendering. `_build_lane_relevant_tl_ids`
+(`fov_simulator.py`) is the map-topology-based filter that runs before the
+fallback ever gets a chance -- see the section below and
+`tests/test_fov_simulator.py`'s `test_build_lane_relevant_tl_ids_*` and
+`test_run_simulation_map_authoritative_reference_*` tests.
 
 ### From per-light candidates to a per-waypoint verdict
 

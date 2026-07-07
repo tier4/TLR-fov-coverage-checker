@@ -34,6 +34,7 @@ import numpy as np
 
 from geometry_calculator import (
     calc_centroid,
+    calc_distance_3d,
     calc_heading_yaw,
     calc_resample_by_distance,
     check_fov_inclusion,
@@ -46,6 +47,75 @@ from models import CameraSpec, LanePath, Point3D, TrafficLight, ValidationResult
 SAMPLE_INTERVAL_M = 1.0
 LANE_DIRECTION_THRESHOLD_DEG = 90.0
 AHEAD_THRESHOLD_DEG = 90.0
+MAX_INHERITANCE_HOPS = 15
+
+
+def _polyline_length(points: list[Point3D]) -> float:
+    return sum(calc_distance_3d(a, b) for a, b in zip(points, points[1:]))
+
+
+def _build_lane_relevant_tl_ids(lanes: list[LanePath], max_range: float) -> dict[str, set[str] | None]:
+    """For each lane, the set of vehicle-signal ids the map's own topology says
+    control it -- or None if neither the lane nor any nearby successor has an
+    authoritative answer, signaling the caller to fall back to the geometric
+    `check_light_relevant_to_lane` heuristic instead.
+
+    A lanelet whose own XML lists `direct_tl_ids` (a `regulatory_element`
+    member pointing at a `subtype=traffic_light` relation -- the map
+    author's own statement of which signal controls this specific lane) is
+    unambiguous: only 90 degrees is a poor test for "is this the same
+    intersection" at a skewed intersection, where a genuinely unrelated
+    cross-street signal can still end up facing "more than 90 degrees" off
+    this lane's heading and slip through as a false candidate. Most
+    lanelets don't carry this reference directly though (only ~20% do on
+    the bundled Odaiba map, typically just the segment immediately
+    approaching the stop line) -- for the rest, this walks forward through
+    `next_lane_ids` (the route graph built from shared lanelet endpoints)
+    to inherit the reference from the nearest downstream lanelet that has
+    one, stopping once accumulated lane length exceeds `max_range` (no
+    point inheriting a light so far down the route it's already out of
+    detection range) or `MAX_INHERITANCE_HOPS` lanelets deep.
+    """
+    lanes_by_id = {lane.id: lane for lane in lanes}
+    lane_length = {lane.id: _polyline_length(lane.center_line) for lane in lanes}
+
+    result: dict[str, set[str] | None] = {}
+    for lane in lanes:
+        if lane.direct_tl_ids:
+            result[lane.id] = set(lane.direct_tl_ids)
+            continue
+
+        visited = {lane.id}
+        frontier = [(lane.id, 0.0)]
+        found: set[str] | None = None
+        for _ in range(MAX_INHERITANCE_HOPS):
+            if found is not None or not frontier:
+                break
+            next_frontier: list[tuple[str, float]] = []
+            for cur_id, dist_so_far in frontier:
+                cur = lanes_by_id.get(cur_id)
+                if cur is None:
+                    continue
+                for nxt_id in cur.next_lane_ids:
+                    if nxt_id in visited:
+                        continue
+                    visited.add(nxt_id)
+                    nxt = lanes_by_id.get(nxt_id)
+                    if nxt is None:
+                        continue
+                    nxt_dist = dist_so_far + lane_length[cur_id]
+                    if nxt_dist > max_range:
+                        continue
+                    if nxt.direct_tl_ids:
+                        found = set(nxt.direct_tl_ids)
+                        break
+                    next_frontier.append((nxt_id, nxt_dist))
+                if found is not None:
+                    break
+            frontier = next_frontier
+        result[lane.id] = found
+
+    return result
 
 
 def run_simulation(
@@ -61,19 +131,28 @@ def run_simulation(
     toward the next waypoint (pitch fixed at 0.0). It is checked against
     every traffic light (optionally restricted to `signal_types`, e.g.
     {"vehicle"}) whose representative position (bulb centroid) is within
-    [camera.min_range, camera.max_range] AND whose facing direction is
-    plausibly meant for this lane's direction of travel (see
-    `check_light_relevant_to_lane`) -- a light facing the same way this
-    lane travels belongs to a parallel opposing-direction lane at the same
-    location, not this one -- AND that hasn't already been passed along
-    the route (see `check_target_ahead`; a light more than 90 degrees off
-    the direction of travel is behind the vehicle, which isn't a
-    meaningful camera-spec gap). Both are skipped entirely rather than
-    counted as a blind spot. A candidate is `is_covered` only if it is
-    both inside the camera's FOV cone AND the signal face is oriented
-    toward the camera within `camera.facing_tolerance_deg` (lights with
-    unknown facing_yaw skip the lane-relevance filter too, since it can't
-    be evaluated, and are never excluded by the facing check either).
+    [camera.min_range, camera.max_range] AND that hasn't already been
+    passed along the route (see `check_target_ahead`; a light more than 90
+    degrees off the direction of travel is behind the vehicle, which isn't
+    a meaningful camera-spec gap).
+
+    On top of that range/ahead filter, a vehicle-signal candidate must
+    also be relevant to this specific lane. Where the map itself says so
+    (`_build_lane_relevant_tl_ids`, using each lanelet's own
+    `regulatory_element` reference or one inherited from a nearby
+    downstream lanelet), that's authoritative and used as-is -- this is
+    what keeps an unrelated cross-street signal at a skewed intersection
+    from being evaluated against a lane it was never meant to regulate.
+    Lanes with no such map data (and all pedestrian-signal candidates,
+    which normally lack a controlling lanelet reference entirely) fall
+    back to the geometric heuristic (`check_light_relevant_to_lane`: a
+    light facing the same way this lane travels belongs to a parallel
+    opposing-direction lane at the same location, not this one).
+    Irrelevant candidates are skipped entirely rather than counted as a
+    blind spot. A candidate is `is_covered` only if it is both inside the
+    camera's FOV cone AND the signal face is oriented toward the camera
+    within `camera.facing_tolerance_deg` (lights with unknown facing_yaw
+    are never excluded by the facing check).
     """
     if not lanes or not traffic_lights:
         return []
@@ -89,6 +168,8 @@ def run_simulation(
         return []
     tl_xyz = np.array([[p.x, p.y, p.z] for _, _, _, _, p in tl_targets], dtype=float)
 
+    lane_relevant_tl_ids = _build_lane_relevant_tl_ids(lanes, camera.max_range)
+
     results: list[ValidationResult] = []
 
     for lane in lanes:
@@ -96,6 +177,7 @@ def run_simulation(
         if len(sampled) < 2:
             continue
 
+        lane_tl_ids = lane_relevant_tl_ids.get(lane.id)
         cam_positions = [Point3D(p.x, p.y, p.z + camera.height) for p in sampled]
         cam_xyz = np.array([[p.x, p.y, p.z] for p in cam_positions], dtype=float)
 
@@ -117,7 +199,10 @@ def run_simulation(
             tl_id, signal_type, group_id, facing_yaw, tl_pos = tl_targets[j]
             cam_pos = cam_positions[i]
 
-            if facing_yaw is not None and not check_light_relevant_to_lane(
+            if signal_type == "vehicle" and lane_tl_ids is not None:
+                if tl_id not in lane_tl_ids:
+                    continue
+            elif facing_yaw is not None and not check_light_relevant_to_lane(
                 tl_facing_yaw=facing_yaw,
                 lane_heading=yaw_cache[i],
                 threshold_deg=LANE_DIRECTION_THRESHOLD_DEG,

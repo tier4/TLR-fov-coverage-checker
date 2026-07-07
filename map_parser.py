@@ -78,6 +78,15 @@ def _classify_signal_type(subtype: str | None) -> str:
     return "unknown"
 
 
+def _index_regulatory_element_subtypes(root: ET.Element) -> dict[str, str | None]:
+    """regulatory_element relation id -> its own `subtype` tag (e.g. "traffic_light")."""
+    return {
+        r.get("id"): _get_tag(r, "subtype")
+        for r in root.findall("relation")
+        if _get_tag(r, "type") == "regulatory_element" and r.get("id") is not None
+    }
+
+
 def parse_nodes(xml_string: str) -> dict[str, Point3D]:
     """Extract every <node>'s (local_x, local_y, ele) into a Point3D table keyed by node id."""
     root = ET.fromstring(xml_string)
@@ -152,10 +161,25 @@ def parse_traffic_lights(xml_string: str, nodes: dict[str, Point3D]) -> list[Tra
 
 
 def parse_lanes(xml_string: str, nodes: dict[str, Point3D]) -> list[LanePath]:
-    """Build one LanePath per `type=lanelet subtype=road` relation, center-lined via Module A."""
+    """Build one LanePath per `type=lanelet subtype=road` relation, center-lined via Module A.
+
+    Each lanelet's own `<member type="relation" role="regulatory_element">`
+    refs are also collected (filtered to ones whose subtype is
+    "traffic_light") into `direct_tl_ids` -- this is the map author's own,
+    authoritative statement of which signal(s) control this specific lane,
+    as opposed to guessing from geometry. Not every lanelet carries one
+    (only ~20% of lanelets in the bundled Odaiba map do, typically the
+    segment immediately approaching a stop line); `next_lane_ids` (lanelet
+    ids whose left way starts exactly where this one's left way ends, by
+    raw node id -- not resampled coordinates, which can drift by floating-
+    point rounding) lets `fov_simulator.py` walk forward through the route
+    to inherit a reference from a nearby downstream lanelet that has one.
+    """
     root = ET.fromstring(xml_string)
     ways = _parse_ways(root)
-    lanes: list[LanePath] = []
+    reg_subtypes = _index_regulatory_element_subtypes(root)
+
+    raw_lanes: list[tuple[str, list[Point3D], list[str], str | None, str | None]] = []
     for rel_elem in root.findall("relation"):
         if _get_tag(rel_elem, "type") != "lanelet" or _get_tag(rel_elem, "subtype") != "road":
             continue
@@ -164,18 +188,39 @@ def parse_lanes(xml_string: str, nodes: dict[str, Point3D]) -> list[LanePath]:
             continue
 
         left_ref = right_ref = None
+        reg_refs: list[str] = []
         for member in rel_elem.findall("member"):
             role = member.get("role")
             if role == "left":
                 left_ref = member.get("ref")
             elif role == "right":
                 right_ref = member.get("ref")
+            elif role == "regulatory_element" and member.get("type") == "relation":
+                ref = member.get("ref")
+                if ref is not None:
+                    reg_refs.append(ref)
         if left_ref is None or right_ref is None:
             continue
 
-        left_points = [nodes[n] for n in ways.get(left_ref, []) if n in nodes]
+        left_way_nodes = ways.get(left_ref, [])
+        left_points = [nodes[n] for n in left_way_nodes if n in nodes]
         right_points = [nodes[n] for n in ways.get(right_ref, []) if n in nodes]
         center = calc_center_line(left_points, right_points)
-        if center:
-            lanes.append(LanePath(id=rel_id, center_line=center))
+        if not center:
+            continue
+
+        direct_tl_ids = [r for r in reg_refs if reg_subtypes.get(r) == "traffic_light"]
+        first_node = left_way_nodes[0] if left_way_nodes else None
+        last_node = left_way_nodes[-1] if left_way_nodes else None
+        raw_lanes.append((rel_id, center, direct_tl_ids, first_node, last_node))
+
+    starts_at: dict[str, list[str]] = {}
+    for rel_id, _center, _direct_tl_ids, first_node, _last_node in raw_lanes:
+        if first_node is not None:
+            starts_at.setdefault(first_node, []).append(rel_id)
+
+    lanes: list[LanePath] = []
+    for rel_id, center, direct_tl_ids, _first_node, last_node in raw_lanes:
+        next_ids = [lid for lid in starts_at.get(last_node, []) if lid != rel_id] if last_node is not None else []
+        lanes.append(LanePath(id=rel_id, center_line=center, direct_tl_ids=direct_tl_ids, next_lane_ids=next_ids))
     return lanes

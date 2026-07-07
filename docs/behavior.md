@@ -324,3 +324,58 @@ way again, click the point in the viewer, read off its `lane_id` from the
 point-info line, and report that specific id -- checking one concrete
 lanelet's topology (as above) is fast and conclusive; searching blindly
 for "some lanelet somewhere" is not.
+
+## A point could fail even with its own signal clearly visible
+
+**Symptom:** a waypoint would show facing_away/out_of_fov (via
+`compute_point_status`'s worst-case-across-groups rule) even when the
+signal directly ahead was plainly covered -- suspected to be an unrelated
+cross-street signal at a nearby, differently-angled intersection getting
+evaluated against a lane it had nothing to do with.
+
+**Root cause:** `check_light_relevant_to_lane`'s only defense against
+this was a single 90-degree threshold on the angle between a light's
+`facing_yaw` and the lane's heading. Real intersections are frequently
+not square; a cross-street signal at a 20-30 degree skew can end up "more
+than 90 degrees" off a lane's heading by coincidence and pass the
+threshold as if it faced this lane, even though it's a different street
+entirely. Once it's a candidate, its own group almost always fails
+outright (it's not oriented for this lane, and often out of the narrow
+FOV cone too) -- and per the grouping rule above, one failed group is
+enough to fail the whole waypoint, regardless of how well-covered the
+lane's actual own signal is.
+
+**Fix:** `parse_lanes` (`map_parser.py`) now also extracts each
+lanelet's own `<member type="relation" role="regulatory_element">` refs,
+keeping the ones pointing at `subtype=traffic_light` relations as
+`LanePath.direct_tl_ids` -- the map author's own, authoritative statement
+of which signal(s) control this specific lane, sidestepping the angle
+threshold's ambiguity entirely. It also records `next_lane_ids` (lanelets
+whose left way starts where this one's ends, via raw node id -- not
+resampled coordinates, which can drift by floating-point rounding).
+
+Only ~20% of lanelets carry a direct reference themselves (usually just
+the segment immediately approaching the stop line), so
+`_build_lane_relevant_tl_ids` (`fov_simulator.py`) walks `next_lane_ids`
+forward from lanelets without one, inheriting the reference from the
+nearest downstream lanelet that has one, bounded by `camera.max_range`
+(no point inheriting a light already out of detection range) and 15 hops.
+That recovers an authoritative answer for 51.7% of all lanelets on the
+bundled map. `run_simulation` uses this set as-is for vehicle-signal
+candidates when available (bypassing `check_light_relevant_to_lane`
+entirely), falling back to the old angle-threshold heuristic only when
+neither a direct nor inherited reference exists. Pedestrian signals are
+untouched -- they normally have no controlling-lanelet reference at all,
+so they always use the geometric fallback, gated explicitly by
+`signal_type == "vehicle"` in the new check rather than relying on the
+map data happening to be empty for them.
+
+**Measured impact** on the bundled map (default camera spec): evaluated
+candidates dropped from 951,725 to 540,373 (removing exactly the kind of
+spurious cross-street candidate this was meant to catch), and vehicle
+coverage rose from 10.7% to **54.0%** -- pedestrian coverage stayed
+exactly the same (34.2%, byte-for-byte), confirming the fix is scoped to
+vehicle signals only and didn't disturb anything else. Verified in the
+viewer: a waypoint that previously had 21 mostly-irrelevant candidates and
+read "facing_away" overall now has exactly 1 candidate (its own signal)
+and reads "covered".

@@ -207,3 +207,60 @@ def test_parse_lanes_ignores_non_road_relations():
     xml = MOCK_XML.replace('v="road"', 'v="crosswalk"')
     nodes = parse_nodes(xml)
     assert parse_lanes(xml, nodes) == []
+
+
+# Two lanelets in sequence (100 -> 101, sharing node "2"/"5" at the junction),
+# only the second of which references a traffic_light regulatory_element --
+# used to test direct_tl_ids extraction and next_lane_ids successor linking.
+TOPOLOGY_MOCK_XML = """<?xml version="1.0" encoding="UTF-8"?>
+<osm generator="test">
+  <node id="1"><tag k="local_x" v="0.0"/><tag k="local_y" v="0.0"/></node>
+  <node id="2"><tag k="local_x" v="10.0"/><tag k="local_y" v="0.0"/></node>
+  <node id="3"><tag k="local_x" v="20.0"/><tag k="local_y" v="0.0"/></node>
+  <node id="4"><tag k="local_x" v="0.0"/><tag k="local_y" v="4.0"/></node>
+  <node id="5"><tag k="local_x" v="10.0"/><tag k="local_y" v="4.0"/></node>
+  <node id="6"><tag k="local_x" v="20.0"/><tag k="local_y" v="4.0"/></node>
+  <way id="10"><nd ref="1"/><nd ref="2"/></way>
+  <way id="11"><nd ref="4"/><nd ref="5"/></way>
+  <way id="12"><nd ref="2"/><nd ref="3"/></way>
+  <way id="13"><nd ref="5"/><nd ref="6"/></way>
+  <relation id="900">
+    <tag k="type" v="regulatory_element"/>
+    <tag k="subtype" v="traffic_light"/>
+  </relation>
+  <relation id="100">
+    <member type="way" role="left" ref="10"/>
+    <member type="way" role="right" ref="11"/>
+    <tag k="type" v="lanelet"/>
+    <tag k="subtype" v="road"/>
+  </relation>
+  <relation id="101">
+    <member type="way" role="left" ref="12"/>
+    <member type="way" role="right" ref="13"/>
+    <member type="relation" role="regulatory_element" ref="900"/>
+    <tag k="type" v="lanelet"/>
+    <tag k="subtype" v="road"/>
+  </relation>
+</osm>
+"""
+
+
+def test_parse_lanes_extracts_direct_tl_ids_from_regulatory_element_member():
+    nodes = parse_nodes(TOPOLOGY_MOCK_XML)
+    lanes = {lane.id: lane for lane in parse_lanes(TOPOLOGY_MOCK_XML, nodes)}
+    assert lanes["101"].direct_tl_ids == ["900"]
+    assert lanes["100"].direct_tl_ids == []
+
+
+def test_parse_lanes_links_successor_via_shared_left_way_endpoint():
+    nodes = parse_nodes(TOPOLOGY_MOCK_XML)
+    lanes = {lane.id: lane for lane in parse_lanes(TOPOLOGY_MOCK_XML, nodes)}
+    assert lanes["100"].next_lane_ids == ["101"]
+    assert lanes["101"].next_lane_ids == []
+
+
+def test_parse_lanes_ignores_non_traffic_light_regulatory_elements():
+    xml = TOPOLOGY_MOCK_XML.replace('<tag k="subtype" v="traffic_light"/>', '<tag k="subtype" v="traffic_sign"/>')
+    nodes = parse_nodes(xml)
+    lanes = {lane.id: lane for lane in parse_lanes(xml, nodes)}
+    assert lanes["101"].direct_tl_ids == []

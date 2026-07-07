@@ -29,6 +29,8 @@ class TrafficLight:
 class LanePath:
     id: str
     center_line: list[Point3D]
+    direct_tl_ids: list[str]  # traffic light regulatory_element ids this lanelet's own XML explicitly references
+    next_lane_ids: list[str]  # lanelet ids whose left way starts where this one's left way ends
 
 
 @dataclass(frozen=True)

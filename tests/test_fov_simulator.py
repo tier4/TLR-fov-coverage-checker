@@ -4,12 +4,14 @@ signal_type filtering, and combining in_fov/facing_camera into
 is_covered -- independently testable from Module B.
 """
 
-from fov_simulator import compute_point_status, run_simulation
+from fov_simulator import _build_lane_relevant_tl_ids, compute_point_status, run_simulation
 from models import CameraSpec, LanePath, Point3D, TrafficLight, ValidationResult
 
 STRAIGHT_LANE = LanePath(
     id="lane-1",
     center_line=[Point3D(x, 0.0, 0.0) for x in range(0, 201, 20)],
+    direct_tl_ids=[],
+    next_lane_ids=[],
 )
 
 # entirely east of x=100 -- a light at x=100 is behind every waypoint here,
@@ -17,6 +19,8 @@ STRAIGHT_LANE = LanePath(
 TRAILING_LANE = LanePath(
     id="lane-2",
     center_line=[Point3D(x, 0.0, 0.0) for x in range(150, 201, 10)],
+    direct_tl_ids=[],
+    next_lane_ids=[],
 )
 
 
@@ -113,6 +117,82 @@ def test_run_simulation_ahead_filter_applies_even_without_facing_yaw():
     tl = TrafficLight(id="ped-already-passed", bulbs=[Point3D(100.0, 0.0, 5.0)], signal_type="pedestrian")
     results = run_simulation([TRAILING_LANE], [tl])
     assert results == []
+
+
+def test_build_lane_relevant_tl_ids_uses_direct_reference():
+    lane = LanePath(id="A", center_line=[Point3D(0, 0, 0), Point3D(50, 0, 0)], direct_tl_ids=["light-1"], next_lane_ids=[])
+    result = _build_lane_relevant_tl_ids([lane], max_range=200.0)
+    assert result["A"] == {"light-1"}
+
+
+def test_build_lane_relevant_tl_ids_inherits_from_successor_within_range():
+    lane_a = LanePath(id="A", center_line=[Point3D(0, 0, 0), Point3D(50, 0, 0)], direct_tl_ids=[], next_lane_ids=["B"])
+    lane_b = LanePath(id="B", center_line=[Point3D(50, 0, 0), Point3D(60, 0, 0)], direct_tl_ids=["light-1"], next_lane_ids=[])
+    result = _build_lane_relevant_tl_ids([lane_a, lane_b], max_range=200.0)
+    assert result["A"] == {"light-1"}
+    assert result["B"] == {"light-1"}
+
+
+def test_build_lane_relevant_tl_ids_propagates_through_multiple_hops():
+    lane_a = LanePath(id="A", center_line=[Point3D(0, 0, 0), Point3D(10, 0, 0)], direct_tl_ids=[], next_lane_ids=["B"])
+    lane_b = LanePath(id="B", center_line=[Point3D(10, 0, 0), Point3D(20, 0, 0)], direct_tl_ids=[], next_lane_ids=["C"])
+    lane_c = LanePath(id="C", center_line=[Point3D(20, 0, 0), Point3D(30, 0, 0)], direct_tl_ids=["light-1"], next_lane_ids=[])
+    result = _build_lane_relevant_tl_ids([lane_a, lane_b, lane_c], max_range=200.0)
+    assert result["A"] == {"light-1"}
+    assert result["B"] == {"light-1"}
+
+
+def test_build_lane_relevant_tl_ids_none_when_successor_reference_is_out_of_range():
+    lane_a = LanePath(id="A", center_line=[Point3D(0, 0, 0), Point3D(250, 0, 0)], direct_tl_ids=[], next_lane_ids=["B"])
+    lane_b = LanePath(id="B", center_line=[Point3D(250, 0, 0), Point3D(260, 0, 0)], direct_tl_ids=["light-1"], next_lane_ids=[])
+    result = _build_lane_relevant_tl_ids([lane_a, lane_b], max_range=200.0)
+    assert result["A"] is None
+
+
+def test_build_lane_relevant_tl_ids_none_with_no_reachable_reference():
+    lane = LanePath(id="A", center_line=[Point3D(0, 0, 0), Point3D(50, 0, 0)], direct_tl_ids=[], next_lane_ids=[])
+    result = _build_lane_relevant_tl_ids([lane], max_range=200.0)
+    assert result["A"] is None
+
+
+def test_run_simulation_map_authoritative_reference_excludes_unlisted_cross_signal():
+    # this lane's own map data says only "ahead-light" controls it -- a
+    # cross-street signal that happens to satisfy the geometric
+    # relevant-to-lane heuristic too (facing_yaw=100deg, >90deg off this
+    # lane's 0deg heading) must still be excluded, since it isn't listed.
+    lane = LanePath(
+        id="lane-authoritative",
+        center_line=[Point3D(x, 0.0, 0.0) for x in range(0, 201, 20)],
+        direct_tl_ids=["ahead-light"],
+        next_lane_ids=[],
+    )
+    ahead_light = TrafficLight(id="ahead-light", bulbs=[Point3D(100.0, 0.0, 5.0)], signal_type="vehicle", facing_yaw=180.0)
+    cross_light = TrafficLight(id="cross-light", bulbs=[Point3D(100.0, 1.0, 5.0)], signal_type="vehicle", facing_yaw=100.0)
+
+    results = run_simulation([lane], [ahead_light, cross_light])
+
+    assert results
+    assert all(r.target_tl_id == "ahead-light" for r in results)
+    assert any(r.is_covered for r in results)
+
+
+def test_run_simulation_map_authoritative_reference_does_not_block_pedestrian_signals():
+    # direct_tl_ids only ever lists vehicle-signal ids in practice (pedestrian
+    # regulatory elements aren't referenced by road lanelets), but the filter
+    # should not accidentally exclude a pedestrian candidate just because
+    # it's absent from that list.
+    lane = LanePath(
+        id="lane-authoritative",
+        center_line=[Point3D(x, 0.0, 0.0) for x in range(0, 201, 20)],
+        direct_tl_ids=["ahead-light"],
+        next_lane_ids=[],
+    )
+    ahead_light = TrafficLight(id="ahead-light", bulbs=[Point3D(100.0, 0.0, 5.0)], signal_type="vehicle", facing_yaw=180.0)
+    ped_light = TrafficLight(id="ped-light", bulbs=[Point3D(100.0, 0.0, 5.0)], signal_type="pedestrian")
+
+    results = run_simulation([lane], [ahead_light, ped_light])
+
+    assert any(r.target_tl_id == "ped-light" for r in results)
 
 
 def _result(target_tl_id, group_id, in_fov, facing_camera):
