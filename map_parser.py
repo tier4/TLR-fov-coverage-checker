@@ -107,9 +107,14 @@ def parse_traffic_lights(xml_string: str, nodes: dict[str, Point3D]) -> list[Tra
 
     Its bulbs are the union of all node positions found on that relation's
     `light_bulbs`-role member way(s). signal_type is classified from the
-    `refers`-role panel way's subtype, and facing_yaw is derived from the
-    bulb centroid and the `ref_line`-role stop line way (both None/"unknown"
-    if those members are absent, which the simulator treats permissively).
+    `refers`-role panel way's subtype, and facing_yaw/stop_line_pos are
+    derived from the bulb centroid and the `ref_line`-role stop line way's
+    midpoint (all None/"unknown" if those members are absent, which the
+    simulator treats permissively). stop_line_pos also anchors
+    `fov_simulator._build_lane_relevant_tl_ids`'s proximity fallback: a
+    lane with no `regulatory_element` reference of its own (directly or
+    inherited) but whose path ends right next to this stop line is very
+    likely approaching this exact signal, lanelet-graph gaps aside.
     """
     root = ET.fromstring(xml_string)
     ways = _parse_ways(root)
@@ -144,18 +149,26 @@ def parse_traffic_lights(xml_string: str, nodes: dict[str, Point3D]) -> list[Tra
         signal_type = _classify_signal_type(_get_tag(panel_elem, "subtype") if panel_elem is not None else None)
 
         facing_yaw: float | None = None
+        stop_line_pos: Point3D | None = None
         stop_line_points = [nodes[n] for n in ways.get(ref_line_ref, []) if n in nodes] if ref_line_ref else []
         if stop_line_points:
             bulb_centroid = calc_centroid(bulbs)
-            stop_line_mid = calc_centroid(stop_line_points)
-            facing_yaw = calc_heading_yaw(bulb_centroid, stop_line_mid)
+            stop_line_pos = calc_centroid(stop_line_points)
+            facing_yaw = calc_heading_yaw(bulb_centroid, stop_line_pos)
 
         # prefixed so a ref_line way id can never collide with a fallback
         # relation id -- ways and relations are separate OSM id namespaces.
         group_id = f"refline:{ref_line_ref}" if ref_line_ref else f"solo:{rel_id}"
 
         traffic_lights.append(
-            TrafficLight(id=rel_id, bulbs=bulbs, signal_type=signal_type, facing_yaw=facing_yaw, group_id=group_id)
+            TrafficLight(
+                id=rel_id,
+                bulbs=bulbs,
+                signal_type=signal_type,
+                facing_yaw=facing_yaw,
+                group_id=group_id,
+                stop_line_pos=stop_line_pos,
+            )
         )
     return traffic_lights
 

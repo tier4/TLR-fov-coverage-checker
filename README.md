@@ -117,19 +117,33 @@ Before that per-waypoint check runs, two pre-filters decide whether a
 light is even a candidate for this lane at all.
 
 **Which lane a light belongs to** is decided by the map itself wherever
-possible, not by geometry: `parse_lanes` reads each lanelet's own
-`regulatory_element` reference (`LanePath.direct_tl_ids`) -- the map
-author's explicit statement of which signal(s) control that lane. Only
-~20% of lanelets carry this directly (typically just the one immediately
-approaching a stop line), so `_build_lane_relevant_tl_ids`
-(`fov_simulator.py`) walks forward through `next_lane_ids` (lanelets
-connected via shared boundary endpoints) to inherit a reference from a
-downstream lanelet within `camera.max_range`, recovering an answer for
-51.7% of lanelets on the bundled map. Only when neither is available does
-it fall back to a geometric heuristic (facing_yaw vs. lane heading), which
-a skewed (non-square) intersection can fool -- a cross-street signal can
-end up "more than 90 degrees" off a lane's heading by coincidence and get
-treated as relevant when it has nothing to do with that lane:
+possible, not by geometry, tried in order by `_build_lane_relevant_tl_ids`
+(`fov_simulator.py`):
+
+1. `parse_lanes` reads each lanelet's own `regulatory_element` reference
+   (`LanePath.direct_tl_ids`) -- the map author's explicit statement of
+   which signal(s) control that lane. Only ~20% of lanelets carry this
+   directly (typically just the one immediately approaching a stop line).
+2. Walk forward through `next_lane_ids` (lanelets connected via shared
+   boundary endpoints) to inherit a reference from a downstream lanelet
+   within `camera.max_range`.
+3. Lanelet connectivity graphs are frequently incomplete right at
+   intersections -- confirmed on the bundled map, a lane can dead-end (or
+   run past `camera.max_range`) before the walk in (2) ever reaches
+   anywhere tagged, well short of where the road actually continues. As a
+   second resort, check whether any traffic light's stop line sits within
+   30m of this lane's own mapped end point (`STOP_LINE_PROXIMITY_M`) --
+   skipped when multiple stop lines are similarly close (a common
+   situation at complex intersections) rather than guess wrong.
+
+Together these recover an authoritative answer for the large majority of
+lanelets on the bundled map. Only when none of the three applies does it
+fall back to a geometric heuristic (facing_yaw vs. lane heading), which a
+skewed (non-square) intersection -- or, per `docs/behavior.md`, a handful
+of very close stop lines at once -- can fool: a cross-street signal can
+end up "more than `LANE_DIRECTION_THRESHOLD_DEG` (120) degrees" off a
+lane's heading by coincidence and get treated as relevant when it has
+nothing to do with that lane:
 
 ```
 Plan view: a light only belongs to the direction it faces (fallback only --
@@ -147,8 +161,8 @@ used first)
                                                      the other lane, skipped
                                                      entirely, not scored)
 
-  relevant = |angle(facing_yaw, lane_heading)| > 90deg   (else skip this
-                                                            (lane, light) pair)
+  relevant = |angle(facing_yaw, lane_heading)| > 120deg   (else skip this
+                                                             (lane, light) pair)
 ```
 
 A second, independent pre-filter then drops any light the camera has

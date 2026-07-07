@@ -45,74 +45,135 @@ from geometry_calculator import (
 from models import CameraSpec, LanePath, Point3D, TrafficLight, ValidationResult
 
 SAMPLE_INTERVAL_M = 1.0
-LANE_DIRECTION_THRESHOLD_DEG = 90.0
+LANE_DIRECTION_THRESHOLD_DEG = 120.0
 AHEAD_THRESHOLD_DEG = 90.0
 MAX_INHERITANCE_HOPS = 15
+STOP_LINE_PROXIMITY_M = 30.0
 
 
 def _polyline_length(points: list[Point3D]) -> float:
     return sum(calc_distance_3d(a, b) for a, b in zip(points, points[1:]))
 
 
-def _build_lane_relevant_tl_ids(lanes: list[LanePath], max_range: float) -> dict[str, set[str] | None]:
-    """For each lane, the set of vehicle-signal ids the map's own topology says
-    control it -- or None if neither the lane nor any nearby successor has an
-    authoritative answer, signaling the caller to fall back to the geometric
-    `check_light_relevant_to_lane` heuristic instead.
+def _nearby_group_by_lane_end(
+    lanes: list[LanePath],
+    group_positions: dict[str, Point3D],
+    threshold: float,
+) -> dict[str, str]:
+    """lane_id -> group_id of the nearest stop line to that lane's own end
+    point, for lanes ending within `threshold` of one. Vectorized: with
+    ~5,000 lanes and ~900 groups this is a ~4.5M-cell distance matrix,
+    fast in numpy but a lot of wasted work as nested Python loops.
+    """
+    if not group_positions:
+        return {}
+    group_ids = list(group_positions)
+    group_xyz = np.array([[group_positions[g].x, group_positions[g].y, group_positions[g].z] for g in group_ids])
+    endpoints = np.array([[lane.center_line[-1].x, lane.center_line[-1].y, lane.center_line[-1].z] for lane in lanes])
 
-    A lanelet whose own XML lists `direct_tl_ids` (a `regulatory_element`
-    member pointing at a `subtype=traffic_light` relation -- the map
-    author's own statement of which signal controls this specific lane) is
-    unambiguous: only 90 degrees is a poor test for "is this the same
-    intersection" at a skewed intersection, where a genuinely unrelated
-    cross-street signal can still end up facing "more than 90 degrees" off
-    this lane's heading and slip through as a false candidate. Most
-    lanelets don't carry this reference directly though (only ~20% do on
-    the bundled Odaiba map, typically just the segment immediately
-    approaching the stop line) -- for the rest, this walks forward through
-    `next_lane_ids` (the route graph built from shared lanelet endpoints)
-    to inherit the reference from the nearest downstream lanelet that has
-    one, stopping once accumulated lane length exceeds `max_range` (no
-    point inheriting a light so far down the route it's already out of
-    detection range) or `MAX_INHERITANCE_HOPS` lanelets deep.
+    diff = endpoints[:, None, :] - group_xyz[None, :, :]
+    dist = np.sqrt(np.sum(diff**2, axis=-1))
+    nearest_idx = np.argmin(dist, axis=1)
+    nearest_dist = dist[np.arange(len(lanes)), nearest_idx]
+
+    return {
+        lane.id: group_ids[nearest_idx[i]]
+        for i, lane in enumerate(lanes)
+        if nearest_dist[i] <= threshold
+    }
+
+
+def _build_lane_relevant_tl_ids(
+    lanes: list[LanePath],
+    traffic_lights: list[TrafficLight],
+    max_range: float,
+) -> dict[str, set[str] | None]:
+    """For each lane, the set of vehicle-signal ids the map's own topology (or
+    geometry, as a second resort) says control it -- or None if nothing
+    authoritative is available anywhere within reach, signaling the caller
+    to fall back to the (least reliable) angle-based heuristic instead.
+
+    Three levels, most authoritative first, tried at the lane itself and
+    then at each successor walked through `next_lane_ids` (bounded by
+    `max_range` of cumulative lane length and `MAX_INHERITANCE_HOPS`):
+
+    1. `direct_tl_ids` -- a lanelet whose own XML lists a
+       `regulatory_element` member pointing at a `subtype=traffic_light`
+       relation. The map author's own statement of which signal controls
+       this specific lane. Only ~20% of lanelets carry this themselves on
+       the bundled Odaiba map (typically just the segment immediately
+       approaching the stop line).
+    2. Proximity to a stop line -- for a lane with no direct reference,
+       whether *any* traffic light's `stop_line_pos` sits within
+       `STOP_LINE_PROXIMITY_M` of that lane's own end point. Lanelet
+       connectivity graphs are frequently incomplete right at
+       intersections (a lane can dead-end, or run out of `next_lane_ids`
+       before reaching anywhere tagged, well short of a real physical
+       dead end) -- confirmed on the bundled map: a lane whose mapped path
+       ends 10.5m from an unrelated-looking stop line turned out to be
+       that stop line's own approach, with no lanelet-graph path to it at
+       all. Skipped when the nearest stop line isn't close and unambiguous
+       (ties between multiple similarly-close stop lines at a complex
+       intersection are common and not safely resolved by distance alone)
+       -- level 3 still applies in that case.
+    3. The geometric heuristic (`check_light_relevant_to_lane`), applied by
+       the caller when this function returns None -- least reliable, since
+       a skewed (non-square) intersection can make a genuinely unrelated
+       cross-street signal face "more than `LANE_DIRECTION_THRESHOLD_DEG`
+       off this lane's heading by coincidence.
     """
     lanes_by_id = {lane.id: lane for lane in lanes}
     lane_length = {lane.id: _polyline_length(lane.center_line) for lane in lanes}
 
+    group_members: dict[str, list[str]] = {}
+    group_positions: dict[str, Point3D] = {}
+    for tl in traffic_lights:
+        group_members.setdefault(tl.group_id, []).append(tl.id)
+        if tl.stop_line_pos is not None and tl.group_id not in group_positions:
+            group_positions[tl.group_id] = tl.stop_line_pos
+    nearby_group_by_lane = _nearby_group_by_lane_end(lanes, group_positions, STOP_LINE_PROXIMITY_M)
+
+    def resolve(lane_id: str) -> set[str] | None:
+        lane = lanes_by_id[lane_id]
+        if lane.direct_tl_ids:
+            return set(lane.direct_tl_ids)
+        nearby_group = nearby_group_by_lane.get(lane_id)
+        if nearby_group is not None:
+            return set(group_members[nearby_group])
+        return None
+
     result: dict[str, set[str] | None] = {}
     for lane in lanes:
-        if lane.direct_tl_ids:
-            result[lane.id] = set(lane.direct_tl_ids)
-            continue
-
-        visited = {lane.id}
-        frontier = [(lane.id, 0.0)]
-        found: set[str] | None = None
-        for _ in range(MAX_INHERITANCE_HOPS):
-            if found is not None or not frontier:
-                break
-            next_frontier: list[tuple[str, float]] = []
-            for cur_id, dist_so_far in frontier:
-                cur = lanes_by_id.get(cur_id)
-                if cur is None:
-                    continue
-                for nxt_id in cur.next_lane_ids:
-                    if nxt_id in visited:
-                        continue
-                    visited.add(nxt_id)
-                    nxt = lanes_by_id.get(nxt_id)
-                    if nxt is None:
-                        continue
-                    nxt_dist = dist_so_far + lane_length[cur_id]
-                    if nxt_dist > max_range:
-                        continue
-                    if nxt.direct_tl_ids:
-                        found = set(nxt.direct_tl_ids)
-                        break
-                    next_frontier.append((nxt_id, nxt_dist))
-                if found is not None:
+        found = resolve(lane.id)
+        if found is None:
+            visited = {lane.id}
+            frontier = [(lane.id, 0.0)]
+            for _ in range(MAX_INHERITANCE_HOPS):
+                if found is not None or not frontier:
                     break
-            frontier = next_frontier
+                next_frontier: list[tuple[str, float]] = []
+                for cur_id, dist_so_far in frontier:
+                    cur = lanes_by_id.get(cur_id)
+                    if cur is None:
+                        continue
+                    for nxt_id in cur.next_lane_ids:
+                        if nxt_id in visited:
+                            continue
+                        visited.add(nxt_id)
+                        nxt = lanes_by_id.get(nxt_id)
+                        if nxt is None:
+                            continue
+                        nxt_dist = dist_so_far + lane_length[cur_id]
+                        if nxt_dist > max_range:
+                            continue
+                        nxt_found = resolve(nxt_id)
+                        if nxt_found is not None:
+                            found = nxt_found
+                            break
+                        next_frontier.append((nxt_id, nxt_dist))
+                    if found is not None:
+                        break
+                frontier = next_frontier
         result[lane.id] = found
 
     return result
@@ -138,16 +199,20 @@ def run_simulation(
 
     On top of that range/ahead filter, a vehicle-signal candidate must
     also be relevant to this specific lane. Where the map itself says so
-    (`_build_lane_relevant_tl_ids`, using each lanelet's own
-    `regulatory_element` reference or one inherited from a nearby
-    downstream lanelet), that's authoritative and used as-is -- this is
-    what keeps an unrelated cross-street signal at a skewed intersection
-    from being evaluated against a lane it was never meant to regulate.
-    Lanes with no such map data (and all pedestrian-signal candidates,
-    which normally lack a controlling lanelet reference entirely) fall
-    back to the geometric heuristic (`check_light_relevant_to_lane`: a
-    light facing the same way this lane travels belongs to a parallel
-    opposing-direction lane at the same location, not this one).
+    (`_build_lane_relevant_tl_ids`: a direct `regulatory_element`
+    reference, one inherited from a nearby downstream lanelet, or -- when
+    the lanelet connectivity graph itself has a gap right at an
+    intersection, which happens -- a stop line sitting suspiciously close
+    to where this lane's mapped path ends), that's authoritative and used
+    as-is. This is what keeps an unrelated cross-street signal at a skewed
+    intersection from being evaluated against a lane it was never meant to
+    regulate. Lanes with no such map data at all (and all pedestrian-signal
+    candidates, which normally lack a controlling lanelet reference
+    entirely) fall back to the geometric heuristic
+    (`check_light_relevant_to_lane`: a light facing the same way this lane
+    travels belongs to a parallel opposing-direction lane at the same
+    location, not this one) -- the least reliable option, since a skewed
+    intersection can still let a genuinely unrelated signal slip through.
     Irrelevant candidates are skipped entirely rather than counted as a
     blind spot. A candidate is `is_covered` only if it is both inside the
     camera's FOV cone AND the signal face is oriented toward the camera
@@ -168,7 +233,7 @@ def run_simulation(
         return []
     tl_xyz = np.array([[p.x, p.y, p.z] for _, _, _, _, p in tl_targets], dtype=float)
 
-    lane_relevant_tl_ids = _build_lane_relevant_tl_ids(lanes, camera.max_range)
+    lane_relevant_tl_ids = _build_lane_relevant_tl_ids(lanes, traffic_lights, camera.max_range)
 
     results: list[ValidationResult] = []
 

@@ -188,6 +188,20 @@ def test_parse_traffic_lights_facing_yaw_none_when_ref_line_missing():
     assert tl.facing_yaw is None
 
 
+def test_parse_traffic_lights_stop_line_pos_is_ref_line_midpoint():
+    # ref_line way 150 spans (110, 201.5) to (110, 202.5) -> midpoint (110, 202)
+    nodes = parse_nodes(MOCK_XML)
+    tl = parse_traffic_lights(MOCK_XML, nodes)[0]
+    assert tl.stop_line_pos == Point3D(110.0, 202.0, 0.0)
+
+
+def test_parse_traffic_lights_stop_line_pos_none_when_ref_line_missing():
+    xml = MOCK_XML.replace('<member type="way" role="ref_line" ref="150"/>', "")
+    nodes = parse_nodes(xml)
+    tl = parse_traffic_lights(xml, nodes)[0]
+    assert tl.stop_line_pos is None
+
+
 def test_parse_traffic_lights_ignores_non_traffic_light_relations():
     xml = MOCK_XML.replace('v="traffic_light"', 'v="traffic_sign"')
     nodes = parse_nodes(xml)

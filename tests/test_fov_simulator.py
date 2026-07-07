@@ -67,12 +67,12 @@ def test_run_simulation_marks_covered_only_when_in_fov_and_facing_camera():
     assert covered
     assert any(r.is_covered for r in covered)
 
-    # same position, facing_yaw=120deg: still >90deg from the lane's 0deg
+    # same position, facing_yaw=130deg: still >120deg from the lane's 0deg
     # heading (i.e. still plausibly meant for this lane, not the opposing
     # one) but past the default 45deg facing_tolerance_deg of straight-on
     # -> geometrically in FOV, but too far off-axis to read.
     facing_off_tolerance = TrafficLight(
-        id="facing-off-tolerance", bulbs=[Point3D(100.0, 0.0, 5.0)], signal_type="vehicle", facing_yaw=120.0
+        id="facing-off-tolerance", bulbs=[Point3D(100.0, 0.0, 5.0)], signal_type="vehicle", facing_yaw=130.0
     )
     results_off = run_simulation([STRAIGHT_LANE], [facing_off_tolerance])
     off = [r for r in results_off if r.target_tl_id == "facing-off-tolerance"]
@@ -121,14 +121,14 @@ def test_run_simulation_ahead_filter_applies_even_without_facing_yaw():
 
 def test_build_lane_relevant_tl_ids_uses_direct_reference():
     lane = LanePath(id="A", center_line=[Point3D(0, 0, 0), Point3D(50, 0, 0)], direct_tl_ids=["light-1"], next_lane_ids=[])
-    result = _build_lane_relevant_tl_ids([lane], max_range=200.0)
+    result = _build_lane_relevant_tl_ids([lane], [], max_range=200.0)
     assert result["A"] == {"light-1"}
 
 
 def test_build_lane_relevant_tl_ids_inherits_from_successor_within_range():
     lane_a = LanePath(id="A", center_line=[Point3D(0, 0, 0), Point3D(50, 0, 0)], direct_tl_ids=[], next_lane_ids=["B"])
     lane_b = LanePath(id="B", center_line=[Point3D(50, 0, 0), Point3D(60, 0, 0)], direct_tl_ids=["light-1"], next_lane_ids=[])
-    result = _build_lane_relevant_tl_ids([lane_a, lane_b], max_range=200.0)
+    result = _build_lane_relevant_tl_ids([lane_a, lane_b], [], max_range=200.0)
     assert result["A"] == {"light-1"}
     assert result["B"] == {"light-1"}
 
@@ -137,7 +137,7 @@ def test_build_lane_relevant_tl_ids_propagates_through_multiple_hops():
     lane_a = LanePath(id="A", center_line=[Point3D(0, 0, 0), Point3D(10, 0, 0)], direct_tl_ids=[], next_lane_ids=["B"])
     lane_b = LanePath(id="B", center_line=[Point3D(10, 0, 0), Point3D(20, 0, 0)], direct_tl_ids=[], next_lane_ids=["C"])
     lane_c = LanePath(id="C", center_line=[Point3D(20, 0, 0), Point3D(30, 0, 0)], direct_tl_ids=["light-1"], next_lane_ids=[])
-    result = _build_lane_relevant_tl_ids([lane_a, lane_b, lane_c], max_range=200.0)
+    result = _build_lane_relevant_tl_ids([lane_a, lane_b, lane_c], [], max_range=200.0)
     assert result["A"] == {"light-1"}
     assert result["B"] == {"light-1"}
 
@@ -145,14 +145,56 @@ def test_build_lane_relevant_tl_ids_propagates_through_multiple_hops():
 def test_build_lane_relevant_tl_ids_none_when_successor_reference_is_out_of_range():
     lane_a = LanePath(id="A", center_line=[Point3D(0, 0, 0), Point3D(250, 0, 0)], direct_tl_ids=[], next_lane_ids=["B"])
     lane_b = LanePath(id="B", center_line=[Point3D(250, 0, 0), Point3D(260, 0, 0)], direct_tl_ids=["light-1"], next_lane_ids=[])
-    result = _build_lane_relevant_tl_ids([lane_a, lane_b], max_range=200.0)
+    result = _build_lane_relevant_tl_ids([lane_a, lane_b], [], max_range=200.0)
     assert result["A"] is None
 
 
 def test_build_lane_relevant_tl_ids_none_with_no_reachable_reference():
     lane = LanePath(id="A", center_line=[Point3D(0, 0, 0), Point3D(50, 0, 0)], direct_tl_ids=[], next_lane_ids=[])
-    result = _build_lane_relevant_tl_ids([lane], max_range=200.0)
+    result = _build_lane_relevant_tl_ids([lane], [], max_range=200.0)
     assert result["A"] is None
+
+
+def _tl_with_stop_line(tl_id, group_id, stop_line_pos):
+    return TrafficLight(id=tl_id, bulbs=[Point3D(0, 0, 0)], signal_type="vehicle", group_id=group_id, stop_line_pos=stop_line_pos)
+
+
+def test_build_lane_relevant_tl_ids_uses_nearby_stop_line_when_graph_has_no_successor():
+    # lane's own connectivity dead-ends (no next_lane_ids at all), but a
+    # stop line sits right where the lane's mapped path runs out -- exactly
+    # the real "graph gap at an intersection" case found on the bundled map.
+    lane = LanePath(id="A", center_line=[Point3D(0, 0, 0), Point3D(50, 0, 0)], direct_tl_ids=[], next_lane_ids=[])
+    tls = [_tl_with_stop_line("light-1", "refline:1", Point3D(55, 0, 0))]  # 5m from lane's end
+    result = _build_lane_relevant_tl_ids([lane], tls, max_range=200.0)
+    assert result["A"] == {"light-1"}
+
+
+def test_build_lane_relevant_tl_ids_ignores_stop_line_beyond_proximity_threshold():
+    lane = LanePath(id="A", center_line=[Point3D(0, 0, 0), Point3D(50, 0, 0)], direct_tl_ids=[], next_lane_ids=[])
+    tls = [_tl_with_stop_line("light-1", "refline:1", Point3D(500, 0, 0))]  # far beyond STOP_LINE_PROXIMITY_M
+    result = _build_lane_relevant_tl_ids([lane], tls, max_range=200.0)
+    assert result["A"] is None
+
+
+def test_build_lane_relevant_tl_ids_proximity_match_includes_whole_group():
+    # a stop line's group can have several redundant heads (through +
+    # turn-arrow) -- the nearby-stop-line match should return every member
+    # of that group, not just the one TrafficLight instance that carries
+    # the position.
+    lane = LanePath(id="A", center_line=[Point3D(0, 0, 0), Point3D(50, 0, 0)], direct_tl_ids=[], next_lane_ids=[])
+    tls = [
+        _tl_with_stop_line("light-1", "refline:1", Point3D(55, 0, 0)),
+        _tl_with_stop_line("light-2", "refline:1", Point3D(55, 0, 0)),
+    ]
+    result = _build_lane_relevant_tl_ids([lane], tls, max_range=200.0)
+    assert result["A"] == {"light-1", "light-2"}
+
+
+def test_build_lane_relevant_tl_ids_direct_reference_takes_priority_over_proximity():
+    lane = LanePath(id="A", center_line=[Point3D(0, 0, 0), Point3D(50, 0, 0)], direct_tl_ids=["own-light"], next_lane_ids=[])
+    tls = [_tl_with_stop_line("nearby-but-not-mine", "refline:1", Point3D(55, 0, 0))]
+    result = _build_lane_relevant_tl_ids([lane], tls, max_range=200.0)
+    assert result["A"] == {"own-light"}
 
 
 def test_run_simulation_map_authoritative_reference_excludes_unlisted_cross_signal():

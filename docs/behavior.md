@@ -413,3 +413,68 @@ uncompressed would have undercut the whole point of making a run easy to
 hand off. `_read_snapshot` still accepts a plain uncompressed JSON file
 too (falls back if gzip decompression fails), in case someone hand-edits
 one.
+
+## Two specific points, diagnosed via their shareable link
+
+Shareable point links turned out to be useful for exactly what they were
+built for: two reported cases (`?lane=2294556&x=...` and
+`?lane=2223446&x=...`) pointed at exact waypoints to investigate, instead
+of "somewhere near this intersection." Querying the running instance's
+own `/api/points/<id>/candidates` for both (rather than guessing) showed
+the same root cause as before, one level deeper.
+
+**Diagnosis:** both lanes have empty `direct_tl_ids`, and
+`_build_lane_relevant_tl_ids`'s successor-chain search failed to reach any
+lanelet that had one -- not because there wasn't one nearby, but because
+the lanelet connectivity graph (built from shared `left`-way endpoints)
+has a gap right at the intersection each lane approaches:
+
+- Lane `2294556`'s chain (`2294556` -> `2294825` -> `2294551`) dead-ends
+  at a lanelet with zero `next_lane_ids` -- no lanelet's left way starts
+  anywhere near that endpoint, even though the road obviously continues
+  physically. The nearest stop line is only 10.5m away and turned out to
+  be exactly the right one (its regulatory_element group is the same one
+  already shown correctly covered at 55m in the candidate list) -- the
+  graph gap, not a wrong "relevant" light, was hiding it.
+- Lane `2223446`'s chain runs past `camera.max_range` before reaching a
+  tagged lanelet. Both root causes converge on the same failure mode:
+  once neither `direct_tl_ids` nor the chain search finds anything, the
+  candidate set falls back to the geometric heuristic
+  (`check_light_relevant_to_lane`, a single 90 degree threshold), which
+  isn't precise enough to keep out a signal meant for a different lane at
+  the same complex intersection.
+
+**Fix:** `_build_lane_relevant_tl_ids` gained a second, independent
+resolution level between the direct reference and the geometric fallback:
+for a lane with no direct/inherited reference, check whether *any*
+traffic light's stop line (`TrafficLight.stop_line_pos`, the `ref_line`
+way's midpoint) sits within `STOP_LINE_PROXIMITY_M` (30m) of that lane's
+own mapped end point -- vectorized across all lanes x all stop lines at
+once (`_nearby_group_by_lane_end`), since a nested Python loop over
+~5,000 lanes x ~900 groups would be needlessly slow. Also tightened
+`LANE_DIRECTION_THRESHOLD_DEG` from 90 to 120 degrees for whatever still
+falls all the way through to the geometric heuristic -- a smaller
+reduction in false positives, but a real one, and cheap to apply.
+
+**Measured impact:**
+- Lane `2294556`'s reported point: `facing_away` -> **`covered`**. Its
+  candidate set went from 3 groups (1 genuinely covered nearby, 2
+  incidentally-covered and irrelevant far-away groups that the proximity
+  fix now correctly excludes) down to exactly the 1 real one.
+- Lane `2223446`'s reported point: **still `out_of_fov`**, not fully
+  fixed. One of its three previously-included irrelevant candidates
+  (`2225071`, 96.77 degrees off lane heading) is now excluded by the
+  tightened threshold, but two others (`2225072`/`2225073`, both a
+  well-aligned ~164-172 degrees off -- looking exactly like genuine
+  matches on facing_yaw alone) remain. Their stop lines sit 91.6m and
+  91.7m from where the successor search gives up, in a near-exact 3-way
+  tie with the correct one (91.7m) -- close enough together that
+  `STOP_LINE_PROXIMITY_M` (30m) correctly declines to guess rather than
+  risk picking the wrong one, but also close enough that simple distance
+  can't disambiguate them at all. This is a real, open limitation: fixing
+  it would need either better lanelet routing data than this map provides
+  at that intersection, or a geometry heuristic well beyond "which stop
+  line is closest."
+- Whole-map default-camera-spec run: vehicle coverage 54.0% -> **75.4%**;
+  pedestrian coverage unchanged (34.2%, exact) as expected, since none of
+  this touches pedestrian-signal handling.

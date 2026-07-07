@@ -23,6 +23,7 @@ class TrafficLight:
     signal_type: str = "unknown"  # "vehicle" | "pedestrian" | "unknown"
     facing_yaw: float | None = None  # degrees; direction the signal face points, or None if undeterminable
     group_id: str = ""  # shared by every TrafficLight regulating the same stop line; defaults to `id` if solo
+    stop_line_pos: Point3D | None = None  # ref_line way midpoint, or None if this light has no ref_line
 
 
 @dataclass(frozen=True)
