@@ -146,6 +146,22 @@ def test_point_candidates_endpoint_offsets_agree_with_normalization(client):
     assert c["is_covered"] == (c["in_fov"] and c["facing_camera"])
 
 
+def test_point_candidates_endpoint_includes_group_status(client):
+    # single-light group in this mock map, so group semantics collapse to
+    # exactly this candidate's own is_covered.
+    res = client.get("/api/points/0/candidates")
+    data = res.get_json()
+    c = data["candidates"][0]
+    assert c["group_id"] == "refline:150"
+    assert c["group_covered"] == c["is_covered"]
+    if c["is_covered"]:
+        assert data["status"] == "covered"
+    elif c["in_fov"]:
+        assert data["status"] == "facing_away"
+    else:
+        assert data["status"] == "out_of_fov"
+
+
 def test_point_candidates_404_for_unknown_id(client):
     res = client.get("/api/points/999999/candidates")
     assert res.status_code == 404

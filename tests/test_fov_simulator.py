@@ -4,8 +4,8 @@ signal_type filtering, and combining in_fov/facing_camera into
 is_covered -- independently testable from Module B.
 """
 
-from fov_simulator import run_simulation
-from models import CameraSpec, LanePath, Point3D, TrafficLight
+from fov_simulator import compute_point_status, run_simulation
+from models import CameraSpec, LanePath, Point3D, TrafficLight, ValidationResult
 
 STRAIGHT_LANE = LanePath(
     id="lane-1",
@@ -113,3 +113,53 @@ def test_run_simulation_ahead_filter_applies_even_without_facing_yaw():
     tl = TrafficLight(id="ped-already-passed", bulbs=[Point3D(100.0, 0.0, 5.0)], signal_type="pedestrian")
     results = run_simulation([TRAILING_LANE], [tl])
     assert results == []
+
+
+def _result(target_tl_id, group_id, in_fov, facing_camera):
+    return ValidationResult(
+        lane_id="lane-1",
+        point=Point3D(0.0, 0.0, 0.0),
+        target_tl_id=target_tl_id,
+        signal_type="vehicle",
+        group_id=group_id,
+        distance_m=100.0,
+        in_fov=in_fov,
+        facing_camera=facing_camera,
+        is_covered=in_fov and facing_camera,
+    )
+
+
+def test_compute_point_status_single_covered_light():
+    assert compute_point_status([_result("a", "g1", True, True)]) == "covered"
+
+
+def test_compute_point_status_single_out_of_fov_light():
+    assert compute_point_status([_result("a", "g1", False, True)]) == "out_of_fov"
+
+
+def test_compute_point_status_single_facing_away_light():
+    assert compute_point_status([_result("a", "g1", True, False)]) == "facing_away"
+
+
+def test_compute_point_status_redundant_head_in_same_group_counts_as_covered():
+    # two heads for the same stop line (same group_id, e.g. a through light
+    # and a turn-arrow light) -- only one is visible, but that's enough to
+    # know the signal state, so the point should read as covered.
+    results = [_result("head-1", "g1", False, True), _result("head-2", "g1", True, True)]
+    assert compute_point_status(results) == "covered"
+
+
+def test_compute_point_status_different_groups_both_must_be_covered():
+    # two genuinely different intersections/groups at this waypoint; only
+    # one is covered -> unlike the redundant-head case, this point is NOT
+    # fully covered, since the second group has no visible member at all.
+    results = [_result("light-A", "g1", True, True), _result("light-B", "g2", False, True)]
+    assert compute_point_status(results) == "out_of_fov"
+
+
+def test_compute_point_status_prefers_facing_away_reason_when_present():
+    # group g1 fails entirely out-of-fov; group g2 fails entirely
+    # facing-away -- facing_away wins as the reported reason, since at
+    # least one failed group had a light that was geometrically visible.
+    results = [_result("light-A", "g1", False, True), _result("light-B", "g2", True, False)]
+    assert compute_point_status(results) == "facing_away"

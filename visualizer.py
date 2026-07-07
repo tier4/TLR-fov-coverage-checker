@@ -11,6 +11,7 @@ import matplotlib
 matplotlib.use("Agg")  # headless-safe: never opens a GUI window
 import matplotlib.pyplot as plt
 
+from fov_simulator import compute_point_status
 from models import LanePath, TrafficLight, ValidationResult
 
 
@@ -31,13 +32,17 @@ def plot_results(
 
     A single waypoint often has more than one candidate light (e.g. this
     intersection's signal and the next one down the road both within
-    range) -- 94.7% of waypoints do, on the bundled Odaiba map, and 48% of
-    waypoints have a *mixed* outcome (covered for one light, not for
-    another) at the exact same (x, y). Since those results occupy the same
-    pixel, only the last-drawn one would normally be visible; problems are
-    drawn last (on top of a same-point "covered" result) so a real blind
-    spot is never hidden by an unrelated light that happens to be fine at
-    that spot -- see docs/behavior.md.
+    range) -- 94.7% of waypoints do, on the bundled Odaiba map. Each
+    waypoint is plotted once, using `compute_point_status`
+    (fov_simulator.py) to combine all of its candidates into a single
+    verdict: covered only if every distinct signal *group* present (see
+    `TrafficLight.group_id` -- redundant heads for the same stop line only
+    need one of them visible) has at least one covered member, otherwise
+    facing_away/out_of_fov for whichever reason applies. See
+    docs/behavior.md for the two mistakes this replaced: plotting every
+    candidate as its own point (letting an unrelated covered light mask a
+    real gap at the same pixel), and requiring every individual light --
+    including redundant ones -- to be independently covered.
 
     `results` only contains candidates that are within [camera.min_range,
     camera.max_range], plausibly meant for the lane's direction of travel,
@@ -67,25 +72,29 @@ def plot_results(
             )
         ax.plot([], [], color="lightgrey", linewidth=2, label="Road (not evaluated: out of range of any light)")
 
-    covered = [] if blind_only else [r for r in results if r.is_covered]
-    facing_away = [r for r in results if r.in_fov and not r.facing_camera]
-    out_of_fov = [r for r in results if not r.in_fov]
+    by_point: dict[tuple[str, float, float], list[ValidationResult]] = {}
+    for r in results:
+        by_point.setdefault((r.lane_id, r.point.x, r.point.y), []).append(r)
 
-    # Draw worst-case-per-pixel last (on top): a point with both a covered
-    # result (for one candidate light) and an uncovered one (for another)
-    # must still read as a problem, not get masked by the "fine" result.
-    for zorder, (pts, color, label) in enumerate(
+    points_by_status: dict[str, list[tuple[float, float]]] = {"covered": [], "facing_away": [], "out_of_fov": []}
+    for (_, x, y), rs in by_point.items():
+        points_by_status[compute_point_status(rs)].append((x, y))
+    if blind_only:
+        points_by_status["covered"] = []
+
+    for zorder, (status, color, label) in enumerate(
         (
-            (covered, "green", "Covered"),
-            (facing_away, "orange", "In FOV, light facing away"),
-            (out_of_fov, "red", "Out of FOV"),
+            ("covered", "green", "Covered"),
+            ("facing_away", "orange", "In FOV, light facing away"),
+            ("out_of_fov", "red", "Out of FOV"),
         ),
         start=2,
     ):
+        pts = points_by_status[status]
         if pts:
             ax.scatter(
-                [r.point.x for r in pts],
-                [r.point.y for r in pts],
+                [p[0] for p in pts],
+                [p[1] for p in pts],
                 c=color,
                 s=6,
                 label=f"{label} ({len(pts)})",

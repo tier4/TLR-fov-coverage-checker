@@ -212,10 +212,15 @@ async function selectPoint(pointId) {
   const detail = await res.json();
 
   currentDetail = detail;
+  // Colored by the light's *group* status, not just its own is_covered: a
+  // redundant head that isn't itself visible still highlights green if a
+  // sibling head sharing its stop line (group_id) is -- matching the
+  // point's own group-aware status instead of implying you can see every
+  // highlighted star directly.
   highlightedLights = new Map(
     detail.candidates.map((c) => [
       c.target_tl_id,
-      c.is_covered ? STATUS_COLOR.covered : c.in_fov ? STATUS_COLOR.facing_away : STATUS_COLOR.out_of_fov,
+      c.group_covered ? STATUS_COLOR.covered : c.in_fov ? STATUS_COLOR.facing_away : STATUS_COLOR.out_of_fov,
     ])
   );
 
@@ -230,7 +235,8 @@ function renderPointInfo(detail) {
   pointInfoEl.textContent =
     `lane ${p.lane_id} @ (${p.x.toFixed(1)}, ${p.y.toFixed(1)})  |  ` +
     `cam_yaw=${detail.cam_yaw.toFixed(1)}deg  |  ` +
-    `FOV ${detail.fov_h}x${detail.fov_v} deg  |  ${detail.candidates.length} candidate(s)`;
+    `FOV ${detail.fov_h}x${detail.fov_v} deg  |  ${detail.candidates.length} candidate(s)  |  ` +
+    `status=${detail.status}`;
 }
 
 function renderCandidateTable(detail) {
@@ -251,6 +257,7 @@ function renderCandidateTable(detail) {
     tr.appendChild(cell(c.in_fov ? "yes" : "no", c.in_fov ? "status-true" : "status-false"));
     tr.appendChild(cell(c.facing_camera ? "yes" : "no", c.facing_camera ? "status-true" : "status-false"));
     tr.appendChild(cell(c.is_covered ? "yes" : "no", c.is_covered ? "status-true" : "status-false"));
+    tr.appendChild(cell(c.group_covered ? "yes" : "no", c.group_covered ? "status-true" : "status-false"));
     candidateTbody.appendChild(tr);
   }
 }

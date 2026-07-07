@@ -31,6 +31,9 @@
     <section id="detail-pane">
       <div class="pane-title">
         Camera view at selected point &mdash; drag to pan, scroll to zoom, double-click to reset.
+        "covered" is this one light's own status; "group covered" is true if
+        any light sharing its stop line is visible (redundant heads only
+        need one to count).
       </div>
       <canvas id="frame-canvas"></canvas>
       <div id="point-info">Select a point on the map.</div>
@@ -45,6 +48,7 @@
             <th>in FOV</th>
             <th>facing cam</th>
             <th>covered</th>
+            <th>group covered</th>
           </tr>
         </thead>
         <tbody></tbody>

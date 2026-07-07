@@ -26,7 +26,14 @@ Schema notes (confirmed against a real Lanelet2 export):
         Odaiba map (median angular error ~7.7 degrees), which is far
         more reliable than trying to infer facing from the two
         endpoints of the panel way (that ordering is not consistently
-        chiral across the dataset).
+        chiral across the dataset). The same ref_line way is also used
+        to group TrafficLights: 67 of the 501 stop lines in the bundled
+        Odaiba map are referenced by more than one regulatory_element
+        (redundant signal heads for the same stop event, e.g. a through
+        light and a turn-arrow light) -- seeing just one of them is
+        enough for a driver/camera to know the signal state there, so
+        they share a `group_id` and `compute_point_status`
+        (fov_simulator.py) treats the group as covered if any member is.
 """
 
 from __future__ import annotations
@@ -134,8 +141,12 @@ def parse_traffic_lights(xml_string: str, nodes: dict[str, Point3D]) -> list[Tra
             stop_line_mid = calc_centroid(stop_line_points)
             facing_yaw = calc_heading_yaw(bulb_centroid, stop_line_mid)
 
+        # prefixed so a ref_line way id can never collide with a fallback
+        # relation id -- ways and relations are separate OSM id namespaces.
+        group_id = f"refline:{ref_line_ref}" if ref_line_ref else f"solo:{rel_id}"
+
         traffic_lights.append(
-            TrafficLight(id=rel_id, bulbs=bulbs, signal_type=signal_type, facing_yaw=facing_yaw)
+            TrafficLight(id=rel_id, bulbs=bulbs, signal_type=signal_type, facing_yaw=facing_yaw, group_id=group_id)
         )
     return traffic_lights
 

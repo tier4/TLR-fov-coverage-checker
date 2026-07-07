@@ -146,6 +146,41 @@ def test_parse_traffic_lights_computes_facing_yaw_toward_stop_line():
     assert tl.facing_yaw == pytest.approx(180.0)
 
 
+def test_parse_traffic_lights_group_id_uses_ref_line_way():
+    nodes = parse_nodes(MOCK_XML)
+    tl = parse_traffic_lights(MOCK_XML, nodes)[0]
+    assert tl.group_id == "refline:150"
+
+
+def test_parse_traffic_lights_group_id_falls_back_to_own_id_without_ref_line():
+    xml = MOCK_XML.replace('<member type="way" role="ref_line" ref="150"/>', "")
+    nodes = parse_nodes(xml)
+    tl = parse_traffic_lights(xml, nodes)[0]
+    assert tl.group_id == "solo:900"
+
+
+def test_parse_traffic_lights_shares_group_id_across_regulatory_elements_on_same_stop_line():
+    # a second regulatory_element (id=901) referencing the SAME ref_line way
+    # (150) as relation 900 -- e.g. a redundant turn-arrow head controlling
+    # the same stop event -- should end up in the same group.
+    xml = MOCK_XML.replace(
+        "</osm>",
+        """  <relation id="901">
+    <member type="way" role="refers" ref="201"/>
+    <member type="way" role="ref_line" ref="150"/>
+    <member type="way" role="light_bulbs" ref="200"/>
+    <tag k="type" v="regulatory_element"/>
+    <tag k="subtype" v="traffic_light"/>
+  </relation>
+</osm>
+""",
+    )
+    nodes = parse_nodes(xml)
+    lights = parse_traffic_lights(xml, nodes)
+    assert len(lights) == 2
+    assert lights[0].group_id == lights[1].group_id == "refline:150"
+
+
 def test_parse_traffic_lights_facing_yaw_none_when_ref_line_missing():
     xml = MOCK_XML.replace('<member type="way" role="ref_line" ref="150"/>', "")
     nodes = parse_nodes(xml)

@@ -25,7 +25,7 @@ from pathlib import Path
 from flask import Flask, abort, jsonify
 
 from config import AppConfig, load_config
-from fov_simulator import SAMPLE_INTERVAL_M, run_simulation
+from fov_simulator import SAMPLE_INTERVAL_M, compute_point_status, run_simulation
 from geometry_calculator import calc_camera_frame_offset, calc_centroid, calc_heading_yaw, calc_resample_by_distance
 from map_parser import parse_lanes, parse_nodes, parse_traffic_lights
 from models import CameraSpec, LanePath, Point3D
@@ -88,13 +88,7 @@ def _load_data(map_path: Path, camera: CameraSpec, signal_types: set[str] | None
         results_by_point[point_id].append(r)
 
     for p in points:
-        rs = results_by_point[p["id"]]
-        if any(not r.in_fov for r in rs):
-            p["status"] = "out_of_fov"
-        elif any(not r.facing_camera for r in rs):
-            p["status"] = "facing_away"
-        else:
-            p["status"] = "covered"
+        p["status"] = compute_point_status(results_by_point[p["id"]])
 
     _state.update(
         camera=camera,
@@ -153,14 +147,19 @@ def point_candidates(point_id: int):
     cam_yaw = _state["yaw_lookup"][p["lane_id"]][(p["x"], p["y"])]
     cam_pos = Point3D(p["x"], p["y"], p["z"] + camera.height)
 
+    point_results = _state["results_by_point"][point_id]
+    group_covered = {r.group_id for r in point_results if r.is_covered}
+
     candidates = []
-    for r in _state["results_by_point"][point_id]:
+    for r in point_results:
         target_pos = _state["tl_positions"][r.target_tl_id]
         yaw_diff, pitch_diff = calc_camera_frame_offset(cam_pos, cam_yaw, 0.0, target_pos)
         candidates.append(
             {
                 "target_tl_id": r.target_tl_id,
                 "signal_type": r.signal_type,
+                "group_id": r.group_id,
+                "group_covered": r.group_id in group_covered,
                 "distance_m": r.distance_m,
                 "in_fov": r.in_fov,
                 "facing_camera": r.facing_camera,
@@ -175,6 +174,7 @@ def point_candidates(point_id: int):
     return jsonify(
         {
             "point": {"lane_id": p["lane_id"], "x": p["x"], "y": p["y"]},
+            "status": compute_point_status(point_results),
             "cam_pos": {"x": cam_pos.x, "y": cam_pos.y, "z": cam_pos.z},
             "cam_yaw": cam_yaw,
             "fov_h": camera.fov_h,

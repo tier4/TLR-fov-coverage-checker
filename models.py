@@ -22,6 +22,7 @@ class TrafficLight:
     bulbs: list[Point3D]
     signal_type: str = "unknown"  # "vehicle" | "pedestrian" | "unknown"
     facing_yaw: float | None = None  # degrees; direction the signal face points, or None if undeterminable
+    group_id: str = ""  # shared by every TrafficLight regulating the same stop line; defaults to `id` if solo
 
 
 @dataclass(frozen=True)
@@ -48,6 +49,7 @@ class ValidationResult:
     point: Point3D
     target_tl_id: str
     signal_type: str
+    group_id: str
     distance_m: float
     in_fov: bool
     facing_camera: bool

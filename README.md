@@ -198,6 +198,24 @@ exposes the same yaw/pitch-diff geometry as a raw offset instead of a
 boolean, which is what the interactive viewer (`webapp.py`) uses to place
 each candidate light inside its FOV-rectangle rendering.
 
+### From per-light candidates to a per-waypoint verdict
+
+`run_simulation` returns one `ValidationResult` per (waypoint, candidate
+light) pair, not per waypoint -- a single waypoint often has several
+candidates, including redundant signal heads for the very same stop line
+(a through light and a separate turn-arrow light are frequently two
+distinct `TrafficLight`s in the source map, 67 of 501 stop lines in the
+bundled Odaiba map). `compute_point_status` (`fov_simulator.py`) is the
+aggregation step every consumer (`main.py`'s printed stats,
+`visualizer.py`'s plot, `webapp.py`'s API) shares: it groups a waypoint's
+candidates by `TrafficLight.group_id` (the shared `ref_line` stop-line
+way, so redundant heads only need one of them visible) and calls the
+waypoint covered only if *every distinct group present* has at least one
+covered member. See `docs/behavior.md` for why this made zero difference
+to the bundled map's numbers (redundant heads turned out to always be
+close enough together to pass or fail as a unit) and what a remaining
+red-point-next-to-a-green-star case actually means instead.
+
 ## Architecture
 
 Each module is independently testable and has a single responsibility:

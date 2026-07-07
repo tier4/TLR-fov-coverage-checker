@@ -20,24 +20,39 @@ from dataclasses import replace
 from pathlib import Path
 
 from config import AppConfig, load_config
-from fov_simulator import run_simulation
+from fov_simulator import compute_point_status, run_simulation
 from map_parser import parse_lanes, parse_nodes, parse_traffic_lights
+from models import ValidationResult
 from visualizer import plot_results
 
 HERE = Path(__file__).resolve().parent
 
 
-def _print_breakdown(label: str, results: list) -> None:
-    total = len(results)
+def _group_by_point(results: list[ValidationResult]) -> dict[tuple[str, float, float], list[ValidationResult]]:
+    by_point: dict[tuple[str, float, float], list[ValidationResult]] = {}
+    for r in results:
+        by_point.setdefault((r.lane_id, r.point.x, r.point.y), []).append(r)
+    return by_point
+
+
+def _print_breakdown(label: str, results: list[ValidationResult]) -> None:
+    """Per-waypoint, not per-(waypoint, light): a waypoint counts as covered
+    if every distinct signal group present is (see compute_point_status),
+    so redundant heads for the same stop line don't each need to be
+    independently visible.
+    """
+    by_point = _group_by_point(results)
+    total = len(by_point)
     if not total:
         print(f"  {label}: no candidates")
         return
-    covered = sum(1 for r in results if r.is_covered)
-    facing_away = sum(1 for r in results if r.in_fov and not r.facing_camera)
-    out_of_fov = sum(1 for r in results if not r.in_fov)
+    statuses = [compute_point_status(rs) for rs in by_point.values()]
+    covered = statuses.count("covered")
+    facing_away = statuses.count("facing_away")
+    out_of_fov = statuses.count("out_of_fov")
     print(
         f"  {label}: {covered}/{total} covered ({covered / total:.1%}) | "
-        f"in-FOV-but-facing-away {facing_away} | out-of-FOV {out_of_fov}"
+        f"facing-away {facing_away} | out-of-FOV {out_of_fov}"
     )
 
 
@@ -118,7 +133,9 @@ def main() -> None:
         _print_breakdown(st, [r for r in results if r.signal_type == st])
 
     if results:
-        blind_lanes = {r.lane_id for r in results if not r.is_covered}
+        blind_lanes = {
+            lane_id for (lane_id, _, _), rs in _group_by_point(results).items() if compute_point_status(rs) != "covered"
+        }
         print(f"Lanes with at least one blind waypoint: {len(blind_lanes)} / {len(lanes)}")
 
     plotted_lights = traffic_lights if signal_types is None else [tl for tl in traffic_lights if tl.signal_type in signal_types]

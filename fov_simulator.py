@@ -18,6 +18,14 @@ time, so the expensive min/max-range distance pre-filter is vectorized
 with numpy per lane; the pure `check_fov_inclusion` /
 `check_light_facing_camera` functions are then only called for the
 (much smaller) set of candidates that survive it.
+
+`run_simulation` returns one `ValidationResult` per (waypoint, candidate
+light) pair -- still per-light, not per-waypoint -- because a single
+waypoint often has several candidate lights, including redundant heads
+for the very same stop line. `compute_point_status` is the second half:
+it aggregates a waypoint's candidates into one covered/facing_away/
+out_of_fov verdict, using `TrafficLight.group_id` so redundant heads don't
+each have to be independently visible.
 """
 
 from __future__ import annotations
@@ -72,10 +80,14 @@ def run_simulation(
 
     if signal_types is not None:
         traffic_lights = [tl for tl in traffic_lights if tl.signal_type in signal_types]
-    tl_targets = [(tl.id, tl.signal_type, tl.facing_yaw, calc_centroid(tl.bulbs)) for tl in traffic_lights if tl.bulbs]
+    tl_targets = [
+        (tl.id, tl.signal_type, tl.group_id, tl.facing_yaw, calc_centroid(tl.bulbs))
+        for tl in traffic_lights
+        if tl.bulbs
+    ]
     if not tl_targets:
         return []
-    tl_xyz = np.array([[p.x, p.y, p.z] for _, _, _, p in tl_targets], dtype=float)
+    tl_xyz = np.array([[p.x, p.y, p.z] for _, _, _, _, p in tl_targets], dtype=float)
 
     results: list[ValidationResult] = []
 
@@ -102,7 +114,7 @@ def run_simulation(
                 else:
                     yaw_cache[i] = calc_heading_yaw(sampled[i - 1], sampled[i])
 
-            tl_id, signal_type, facing_yaw, tl_pos = tl_targets[j]
+            tl_id, signal_type, group_id, facing_yaw, tl_pos = tl_targets[j]
             cam_pos = cam_positions[i]
 
             if facing_yaw is not None and not check_light_relevant_to_lane(
@@ -145,6 +157,7 @@ def run_simulation(
                     point=sampled[i],
                     target_tl_id=tl_id,
                     signal_type=signal_type,
+                    group_id=group_id,
                     distance_m=float(dist[i, j]),
                     in_fov=in_fov,
                     facing_camera=facing_camera,
@@ -153,3 +166,39 @@ def run_simulation(
             )
 
     return results
+
+
+def compute_point_status(results_for_point: list[ValidationResult]) -> str:
+    """Aggregate every candidate light at one waypoint (i.e. every
+    ValidationResult sharing the same lane_id and point) into a single
+    "covered" / "facing_away" / "out_of_fov" status, using per-signal-group
+    semantics: redundant traffic light heads sharing the same stop line
+    (`TrafficLight.group_id`, e.g. a through light and a turn-arrow light)
+    only need one of them visible to count as covered -- seeing one head
+    is enough to know the signal state, so requiring every individual head
+    to be independently covered overstates how many real gaps there are.
+
+    The point is "covered" only if every distinct group present has at
+    least one covered member. Otherwise it reflects the least-bad reason
+    among the groups that failed entirely: "facing_away" if any failed
+    group at least had a light in FOV (just poorly oriented), else
+    "out_of_fov".
+    """
+    by_group: dict[str, list[ValidationResult]] = {}
+    for r in results_for_point:
+        by_group.setdefault(r.group_id, []).append(r)
+
+    all_groups_covered = True
+    failed_group_has_facing_away = False
+    for group_results in by_group.values():
+        if any(r.is_covered for r in group_results):
+            continue
+        all_groups_covered = False
+        if any(r.in_fov and not r.facing_camera for r in group_results):
+            failed_group_has_facing_away = True
+
+    if all_groups_covered:
+        return "covered"
+    if failed_group_has_facing_away:
+        return "facing_away"
+    return "out_of_fov"

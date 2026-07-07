@@ -224,3 +224,56 @@ only via the browser console before this fix.
 Verified with a headless browser against the exact reproducing config
 (`camera_spec.yaml` with `min_range: 20, max_range: 250, signal_type:
 vehicle`): map renders, click-to-inspect works, no console errors.
+
+## A point could show red/orange next to a highlighted green light
+
+**Symptom:** after the viewer started highlighting a selected point's
+candidate lights, a point could show a green (covered) highlighted star
+right next to it while the point's own dot was red or orange -- reported
+as "that's got to be a bug."
+
+**Investigation:** the worst-case-per-point aggregation (see the "covered
+point wasn't always fully covered" entry above) was working as designed
+-- a point is only "covered" if *every* candidate light is -- but that
+didn't match reality for one specific case: a stop line can have more
+than one physical signal head (e.g. a through light and a separate
+turn-arrow light) recorded as **separate** `TrafficLight`s in the map
+data (separate `regulatory_element` relations), each an independent
+candidate. Seeing just one of them is enough to know the signal state, so
+requiring every redundant head to be independently visible overstated how
+many points were actually blind. Confirmed empirically: 67 of the 501
+stop lines (`ref_line` ways) in the bundled Odaiba map are referenced by
+more than one regulatory_element.
+
+**Fix:** `TrafficLight.group_id` (`map_parser.py`) is the `ref_line` way
+id shared by every regulatory_element that references it (or `solo:<own
+id>` if it has none, e.g. pedestrian signals). `compute_point_status`
+(`fov_simulator.py`) uses it to aggregate per *group* instead of per
+individual light: a point is covered only if every distinct group present
+has at least one covered member. `webapp.py`, `visualizer.py`, and
+`main.py`'s printed stats all switched to this group-aware aggregation
+(previously each computed a "worst case across all candidates" inline,
+duplicating and slightly diverging in each place).
+
+**But:** re-running the full bundled map through both the default camera
+spec and the reported `camera_spec.yaml` (`min_range=20, max_range=250,
+signal_type=vehicle`) found **zero** waypoints where this fix actually
+changes the covered/not-covered verdict, and zero cases anywhere in the
+map where two lights sharing a `group_id` disagree on `is_covered` at the
+same waypoint. Redundant heads for the same stop line are apparently
+always mounted close enough together that they're geometrically
+indistinguishable from any waypoint far enough away to be in range at all
+-- confirmed by clicking through the viewer's new "group covered" column:
+sibling heads consistently pass or fail together.
+
+That means the original "green star, red point" report was very likely a
+*different* case: two lights from two genuinely different stop lines both
+candidates for the same waypoint (e.g. this intersection's signal and the
+next one down the road), where one is visible and the other isn't. Per
+the grouping rule as specified (group by stop line, not more broadly),
+that point is correctly still not covered -- the other intersection being
+visible doesn't tell a driver/camera anything about the signal state at
+*this* one. If a specific point still looks wrong after this fix, it's
+worth clicking it in the viewer and checking the `group_id` column: same
+group with different outcomes would be a bug; different groups is
+expected and, per this feature's own definition, correct.
