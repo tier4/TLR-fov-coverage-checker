@@ -14,13 +14,14 @@ const TYPE_COLOR = {
   unknown: "silver",
 };
 
-// Assumed physical housing size [m] used to draw each candidate's apparent
-// (angular) size in the camera view. Japanese signal conventions: a vehicle
-// signal is a horizontal 3-lamp housing with 300mm lenses (~1.25m wide x
-// 0.45m tall); a pedestrian signal is a vertical 2-lamp housing (~0.45m
-// wide x 0.9m tall). Assumptions, not map data -- the map records bulb
-// positions, not housing outlines -- so treat the rectangles as "roughly
-// this many degrees of the image", not exact silhouettes.
+// Fallback housing size [m] for the camera view's apparent-size boxes,
+// used only when a light's own panel dimensions are missing from the map.
+// The map normally carries the real per-light size (the `refers` panel
+// way spans the housing width, its `height` tag gives the vertical size
+// -- every signal on the bundled map has both), which the API delivers
+// as panel_width/panel_height per candidate. These constants are the
+// typical Japanese housings: horizontal 3-lamp vehicle (~1.25x0.45m) and
+// vertical 2-lamp pedestrian (~0.45x0.9m).
 const SIGNAL_HOUSING_M = {
   vehicle: { w: 1.25, h: 0.45 },
   pedestrian: { w: 0.45, h: 0.9 },
@@ -538,10 +539,14 @@ function renderFrame(detail) {
     const color = c.is_covered ? STATUS_COLOR.covered : c.in_fov ? STATUS_COLOR.facing_away : STATUS_COLOR.out_of_fov;
 
     // apparent angular size of the signal housing at this distance:
-    // small-angle-free, 2*atan(half-size / distance)
-    const size = SIGNAL_HOUSING_M[c.signal_type] || SIGNAL_HOUSING_M.unknown;
-    const wDeg = 2 * Math.atan2(size.w / 2, c.distance_m) * (180 / Math.PI);
-    const hDeg = 2 * Math.atan2(size.h / 2, c.distance_m) * (180 / Math.PI);
+    // small-angle-free, 2*atan(half-size / distance). Real per-light
+    // dimensions from the map when available, typical-housing fallback
+    // otherwise.
+    const fallback = SIGNAL_HOUSING_M[c.signal_type] || SIGNAL_HOUSING_M.unknown;
+    const wM = c.panel_width ?? fallback.w;
+    const hM = c.panel_height ?? fallback.h;
+    const wDeg = 2 * Math.atan2(wM / 2, c.distance_m) * (180 / Math.PI);
+    const hDeg = 2 * Math.atan2(hM / 2, c.distance_m) * (180 / Math.PI);
     const rw = wDeg * pxPerDeg, rh = hDeg * pxPerDeg;
     ctx.fillStyle = color;
     ctx.globalAlpha = 0.4;

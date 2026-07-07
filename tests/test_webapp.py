@@ -55,6 +55,16 @@ MOCK_XML = """<?xml version="1.0" encoding="UTF-8"?>
     <tag k="local_y" v="202.5"/>
     <tag k="ele" v="0.0"/>
   </node>
+  <node id="30" lat="35.0" lon="139.0">
+    <tag k="local_x" v="149.9"/>
+    <tag k="local_y" v="202.0"/>
+    <tag k="ele" v="9.8"/>
+  </node>
+  <node id="31" lat="35.0" lon="139.0">
+    <tag k="local_x" v="151.15"/>
+    <tag k="local_y" v="202.0"/>
+    <tag k="ele" v="9.8"/>
+  </node>
   <way id="100">
     <nd ref="1"/>
     <nd ref="2"/>
@@ -75,10 +85,11 @@ MOCK_XML = """<?xml version="1.0" encoding="UTF-8"?>
     <tag k="traffic_light_id" v="201"/>
   </way>
   <way id="201">
-    <nd ref="172463"/>
-    <nd ref="172464"/>
+    <nd ref="30"/>
+    <nd ref="31"/>
     <tag k="type" v="traffic_light"/>
     <tag k="subtype" v="red_yellow_green"/>
+    <tag k="height" v="0.45"/>
   </way>
   <relation id="50">
     <member type="way" role="left" ref="100"/>
@@ -227,6 +238,14 @@ def test_read_snapshot_also_accepts_uncompressed_json(tmp_path, client):
     snapshot_path.write_text(json.dumps(original), encoding="utf-8")
 
     assert webapp._read_snapshot(snapshot_path) == original
+
+
+def test_point_candidates_include_panel_size_from_map(client):
+    data = client.get("/api/points/0/candidates").get_json()
+    c = data["candidates"][0]
+    # panel way 201: nodes (149.9, 202) -> (151.15, 202), height tag 0.45
+    assert c["panel_width"] == pytest.approx(1.25)
+    assert c["panel_height"] == pytest.approx(0.45)
 
 
 def test_meta_includes_latlon_transform(client):

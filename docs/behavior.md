@@ -628,11 +628,21 @@ at the angular size of an assumed housing at that distance
 (`2*atan(size/2 / distance)`), farthest-first so a nearer light paints
 over a farther one in the same occlusion order a camera would see.
 
-The housing sizes are stated assumptions (`SIGNAL_HOUSING_M` in app.js),
-not map data: the map records bulb positions, not housing outlines. The
-values follow Japanese conventions -- vehicle: horizontal 3-lamp with
-300mm lenses, ~1.25x0.45m; pedestrian: vertical 2-lamp, ~0.45x0.9m. At
-viewer scale that means a vehicle light at 100m spans ~0.7deg of the
-30deg FOV -- the boxes make it immediately visible how thin the margin
-is at max_range. A 2.5px center dot stays drawn on top so a light at
-250m (box under ~4px) doesn't vanish entirely.
+The housing sizes were initially stated assumptions -- until the user
+pointed out the map itself carries them, which checked out completely:
+the `refers` panel way is a linestring spanning the housing's physical
+width (endpoint-to-endpoint distance), and the way carries a `height`
+tag with the vertical size. Every one of the 897 signals on the bundled
+map has both. The real data is richer than the assumption was: standard
+horizontal vehicle housings vary 1.04-1.34m wide x 0.45/0.5m tall, some
+are 1.25x0.9m (arrow sections below the lamps), pedestrian signals run
+~0.4x0.9m, and there are six 0.39x1.2m *vertical* vehicle signals
+(snow-region style) that the per-type assumption would have rendered
+sideways. So: `TrafficLight.panel_width`/`panel_height` (parsed in
+`parse_traffic_lights`), delivered per candidate by the API
+(`_SNAPSHOT_FORMAT_VERSION` 5), drawn at real size in the camera view.
+The old typical-housing constants remain only as a fallback for maps
+that lack the data. At viewer scale a vehicle light at 100m spans
+~0.7deg of the 30deg FOV -- the boxes make it immediately visible how
+thin the margin is at max_range. A 2.5px center dot stays drawn on top
+so a light at 250m (box under ~4px) doesn't vanish entirely.

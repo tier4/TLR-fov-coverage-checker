@@ -42,7 +42,7 @@ import xml.etree.ElementTree as ET
 
 import numpy as np
 
-from geometry_calculator import calc_center_line, calc_centroid, calc_heading_yaw
+from geometry_calculator import calc_center_line, calc_centroid, calc_distance_3d, calc_heading_yaw
 from models import LanePath, Point3D, TrafficLight
 
 _VEHICLE_SUBTYPES = {"red_yellow_green"}
@@ -189,6 +189,25 @@ def parse_traffic_lights(xml_string: str, nodes: dict[str, Point3D]) -> list[Tra
         panel_elem = way_elems.get(refers_ref) if refers_ref else None
         signal_type = _classify_signal_type(_get_tag(panel_elem, "subtype") if panel_elem is not None else None)
 
+        # The panel way *is* the housing's physical extent: a linestring
+        # spanning its width (endpoint-to-endpoint), with the vertical size
+        # in a `height` tag. Real data, not an assumption -- on the bundled
+        # map every signal carries both (widths 1.04-1.34m for standard
+        # horizontal vehicle housings, ~0.4m for pedestrian, and a handful
+        # of 0.39x1.2m vertical snow-region vehicle signals).
+        panel_width: float | None = None
+        panel_height: float | None = None
+        if panel_elem is not None:
+            panel_points = [nodes[n] for n in ways.get(refers_ref, []) if n in nodes]
+            if len(panel_points) >= 2:
+                panel_width = calc_distance_3d(panel_points[0], panel_points[-1])
+            height_tag = _get_tag(panel_elem, "height")
+            if height_tag is not None:
+                try:
+                    panel_height = float(height_tag)
+                except ValueError:
+                    pass
+
         facing_yaw: float | None = None
         stop_line_pos: Point3D | None = None
         stop_line_points = [nodes[n] for n in ways.get(ref_line_ref, []) if n in nodes] if ref_line_ref else []
@@ -209,6 +228,8 @@ def parse_traffic_lights(xml_string: str, nodes: dict[str, Point3D]) -> list[Tra
                 facing_yaw=facing_yaw,
                 group_id=group_id,
                 stop_line_pos=stop_line_pos,
+                panel_width=panel_width,
+                panel_height=panel_height,
             )
         )
     return traffic_lights

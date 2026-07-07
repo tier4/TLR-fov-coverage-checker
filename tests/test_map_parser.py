@@ -52,6 +52,16 @@ MOCK_XML = """<?xml version="1.0" encoding="UTF-8"?>
     <tag k="local_y" v="202.5"/>
     <tag k="ele" v="0.0"/>
   </node>
+  <node id="30" lat="35.0" lon="139.0">
+    <tag k="local_x" v="149.9"/>
+    <tag k="local_y" v="202.0"/>
+    <tag k="ele" v="9.8"/>
+  </node>
+  <node id="31" lat="35.0" lon="139.0">
+    <tag k="local_x" v="151.15"/>
+    <tag k="local_y" v="202.0"/>
+    <tag k="ele" v="9.8"/>
+  </node>
   <way id="100">
     <nd ref="1"/>
     <nd ref="2"/>
@@ -72,10 +82,11 @@ MOCK_XML = """<?xml version="1.0" encoding="UTF-8"?>
     <tag k="traffic_light_id" v="201"/>
   </way>
   <way id="201">
-    <nd ref="172463"/>
-    <nd ref="172464"/>
+    <nd ref="30"/>
+    <nd ref="31"/>
     <tag k="type" v="traffic_light"/>
     <tag k="subtype" v="red_yellow_green"/>
+    <tag k="height" v="0.45"/>
   </way>
   <relation id="50">
     <member type="way" role="left" ref="100"/>
@@ -96,7 +107,7 @@ MOCK_XML = """<?xml version="1.0" encoding="UTF-8"?>
 
 def test_parse_nodes_extracts_coordinates():
     nodes = parse_nodes(MOCK_XML)
-    assert len(nodes) == 8
+    assert len(nodes) == 10
     assert nodes["1"] == Point3D(100.0, 200.0, 5.0)
     assert nodes["10"] == Point3D(150.0, 202.0, 10.0)
 
@@ -200,6 +211,31 @@ def test_parse_traffic_lights_stop_line_pos_none_when_ref_line_missing():
     nodes = parse_nodes(xml)
     tl = parse_traffic_lights(xml, nodes)[0]
     assert tl.stop_line_pos is None
+
+
+def test_parse_traffic_lights_panel_size_from_refers_way():
+    # panel way 201 spans nodes 30 (149.9, 202) -> 31 (151.15, 202) and
+    # carries height=0.45 -- the real housing size, straight from the map
+    nodes = parse_nodes(MOCK_XML)
+    tl = parse_traffic_lights(MOCK_XML, nodes)[0]
+    assert tl.panel_width == pytest.approx(1.25)
+    assert tl.panel_height == pytest.approx(0.45)
+
+
+def test_parse_traffic_lights_panel_height_none_without_height_tag():
+    xml = MOCK_XML.replace('<tag k="height" v="0.45"/>', "")
+    nodes = parse_nodes(xml)
+    tl = parse_traffic_lights(xml, nodes)[0]
+    assert tl.panel_width == pytest.approx(1.25)
+    assert tl.panel_height is None
+
+
+def test_parse_traffic_lights_panel_width_none_when_panel_nodes_unresolvable():
+    xml = MOCK_XML.replace('<nd ref="30"/>', '<nd ref="99998"/>').replace('<nd ref="31"/>', '<nd ref="99999"/>')
+    nodes = parse_nodes(xml)
+    tl = parse_traffic_lights(xml, nodes)[0]
+    assert tl.panel_width is None
+    assert tl.panel_height == pytest.approx(0.45)
 
 
 def test_parse_traffic_lights_ignores_non_traffic_light_relations():

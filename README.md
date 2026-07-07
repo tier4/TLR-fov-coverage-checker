@@ -123,13 +123,17 @@ Disabled automatically when the map has no lat/lon data.
 The camera-view panel renders through the windshield: L is the vehicle's
 left, the dashed FOV rectangle keeps its true `fov_h x fov_v` aspect
 ratio, and the blue line is the horizon (the camera is modeled level,
-pitch 0). Each candidate light is drawn as a translucent box at the
-apparent angular size of an assumed housing at its distance (vehicle
-~1.25x0.45m horizontal 3-lamp, pedestrian ~0.45x0.9m vertical 2-lamp --
-conventions, not map data), farthest first so a nearer light paints over
-a farther one the way a camera would see it; a small center dot keeps
-very distant lights visible even when their box shrinks below a few
-pixels.
+pitch 0). Each candidate light is drawn as a translucent box at its
+apparent angular size at that distance, using the light's real housing
+dimensions from the map itself (the `refers` panel way spans the
+housing's width; its `height` tag gives the vertical size -- every
+signal on the bundled map carries both, including a handful of vertical
+snow-region housings a fixed assumption would get wrong). Farthest
+drawn first so a nearer light paints over a farther one the way a
+camera would see it; a small center dot keeps very distant lights
+visible even when their box shrinks below a few pixels. Typical-housing
+constants (vehicle ~1.25x0.45m, pedestrian ~0.45x0.9m) are used only
+for maps that lack the size data.
 
 Available settings (CLI flag / YAML key under `camera:`):
 

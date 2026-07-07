@@ -46,7 +46,7 @@ app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="")
 # Populated once by _load_data() or _deserialize_state() before the server
 # starts serving requests.
 _state: dict = {}
-_SNAPSHOT_FORMAT_VERSION = 4  # bumped when latlon_transform + signal_types were added to the schema
+_SNAPSHOT_FORMAT_VERSION = 5  # bumped when tl_panel_size was added to the schema
 
 
 def _build_lane_yaw_lookup(lanes: list[LanePath]) -> dict[str, dict[tuple[float, float], float]]:
@@ -86,6 +86,7 @@ def _load_from_xml(xml_string: str, camera: CameraSpec, signal_types: set[str] |
     tl_positions = {tl.id: calc_centroid(tl.bulbs) for tl in traffic_lights if tl.bulbs}
     tl_facing_yaw = {tl.id: tl.facing_yaw for tl in traffic_lights if tl.bulbs}
     tl_signal_type = {tl.id: tl.signal_type for tl in traffic_lights if tl.bulbs}
+    tl_panel_size = {tl.id: [tl.panel_width, tl.panel_height] for tl in traffic_lights if tl.bulbs}
     yaw_lookup = _build_lane_yaw_lookup(lanes)
     latlon_transform = parse_latlon_transform(xml_string)
 
@@ -115,6 +116,7 @@ def _load_from_xml(xml_string: str, camera: CameraSpec, signal_types: set[str] |
         tl_positions=tl_positions,
         tl_facing_yaw=tl_facing_yaw,
         tl_signal_type=tl_signal_type,
+        tl_panel_size=tl_panel_size,
         yaw_lookup=yaw_lookup,
         latlon_transform=latlon_transform,
         lane_count=len(lanes),
@@ -162,6 +164,7 @@ def _serialize_state() -> dict:
         "tl_positions": {tl_id: {"x": p.x, "y": p.y, "z": p.z} for tl_id, p in _state["tl_positions"].items()},
         "tl_facing_yaw": _state["tl_facing_yaw"],
         "tl_signal_type": _state["tl_signal_type"],
+        "tl_panel_size": _state["tl_panel_size"],
         "yaw_lookup": {
             lane_id: [[x, y, yaw] for (x, y), yaw in per_lane.items()]
             for lane_id, per_lane in _state["yaw_lookup"].items()
@@ -185,6 +188,7 @@ def _deserialize_state(data: dict) -> None:
     tl_positions = {tl_id: Point3D(**pos) for tl_id, pos in data["tl_positions"].items()}
     tl_facing_yaw = data["tl_facing_yaw"]
     tl_signal_type = data["tl_signal_type"]
+    tl_panel_size = data["tl_panel_size"]
     yaw_lookup = {
         lane_id: {(x, y): yaw for x, y, yaw in entries} for lane_id, entries in data["yaw_lookup"].items()
     }
@@ -218,6 +222,7 @@ def _deserialize_state(data: dict) -> None:
         tl_positions=tl_positions,
         tl_facing_yaw=tl_facing_yaw,
         tl_signal_type=tl_signal_type,
+        tl_panel_size=tl_panel_size,
         yaw_lookup=yaw_lookup,
         latlon_transform=data["latlon_transform"],
         lane_count=data["lane_count"],
@@ -358,10 +363,12 @@ def point_candidates(point_id: int):
     point_results = _state["results_by_point"][point_id]
     group_covered = {r.group_id for r in point_results if r.is_covered}
 
+    tl_panel_size = _state["tl_panel_size"]
     candidates = []
     for r in point_results:
         target_pos = _state["tl_positions"][r.target_tl_id]
         yaw_diff, pitch_diff = calc_camera_frame_offset(cam_pos, cam_yaw, 0.0, target_pos)
+        panel_width, panel_height = tl_panel_size.get(r.target_tl_id) or (None, None)
         candidates.append(
             {
                 "target_tl_id": r.target_tl_id,
@@ -376,6 +383,8 @@ def point_candidates(point_id: int):
                 "pitch_diff": pitch_diff,
                 "norm_x": yaw_diff / (camera.fov_h / 2.0),
                 "norm_y": pitch_diff / (camera.fov_v / 2.0),
+                "panel_width": panel_width,
+                "panel_height": panel_height,
             }
         )
 
