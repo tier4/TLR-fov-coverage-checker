@@ -51,18 +51,23 @@ camera-view panel to reset it back to auto-fit). Selecting a point also
 draws its FOV frustum on the map itself -- a blue wedge from `min_range`
 to `max_range` spanning `fov_h`, with a dashed line down the middle showing
 `cam_yaw` (the lane's direction of travel at that point) -- and enlarges
-its candidate traffic lights' stars, colored by that candidate's status,
-so it's clear at a glance which star(s) on the map the camera-view panel
-is showing. The "Point size" slider above the map scales the waypoint dots
-if they're too small to make out at the zoom level you're at.
+its candidate traffic lights' markers, colored by that candidate's
+status, so it's clear at a glance which one(s) on the map the camera-view
+panel is showing. The "Point size" slider above the map scales the
+waypoint dots if they're too small to make out at the zoom level you're at.
 
-Every star also carries a short arrow showing which way that signal
-faces (`facing_yaw`, from `/api/traffic_lights`) -- zoom into an
-intersection and you can see directly whether a light's own orientation
-actually points back down a given lane's approach, instead of having to
-infer it from a `check_light_relevant_to_lane` pass/fail. A star with no
-arrow has no `ref_line` in the map (facing_yaw is unknown -- normally a
-pedestrian signal).
+Each traffic light is drawn as a triangle pointing in the direction that
+signal actually faces (`facing_yaw`, from `/api/traffic_lights`) -- a
+single solid shape rather than a separate arrow overlay, since a thin
+line degrades badly at small marker sizes/low zoom while a filled wedge
+stays legible. Zoom into an intersection and you can see directly whether
+a light's own orientation actually points back down a given lane's
+approach, instead of having to infer it from a
+`check_light_relevant_to_lane` pass/fail. Color distinguishes signal
+type when a marker isn't currently highlighted: gold for vehicle, cyan
+for pedestrian. A plain circle (no triangle) means facing_yaw is unknown
+-- no `ref_line` in the map, normally a pedestrian signal, since those
+usually lack a stop line reference entirely.
 
 CLI flags always take precedence over a `--config` YAML, which takes
 precedence over built-in defaults (`CameraSpec` in `models.py`).

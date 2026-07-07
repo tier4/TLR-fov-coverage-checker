@@ -520,3 +520,26 @@ down the approach frustum as expected; the wrongly-included light's arrow
 points at a visibly different angle, not aligned with the frustum axis --
 confirming by eye what the geometry check computes, and giving the user a
 way to spot the next one of these without asking for a script each time.
+
+## From a star + separate arrow to one triangle marker
+
+The star-plus-arrow-overlay rendering above worked, but the user asked
+for a shape that encodes direction more robustly, and for vehicle vs
+pedestrian signals to be visually distinguishable too. The thin arrow
+line was the weaker part of that design: at small marker sizes or low
+zoom its stroke width could round down toward sub-pixel and become hard
+to see, i.e. the exact "easy to misread" failure this whole viewer exists
+to avoid, just moved into the marker rendering itself.
+
+Replaced both `drawStar` and `drawFacingArrow` with one `drawLightMarker`:
+a single filled triangle whose tip points in `facing_yaw`'s direction, or
+a plain filled circle when `facing_yaw` is unknown (no separate small
+overlay to disappear at low zoom). Vehicle vs pedestrian is now color
+(`TYPE_COLOR`: gold vs cyan) rather than shape, since shape is spent on
+encoding direction; a highlighted marker (a candidate of the selected
+point) still uses status color instead of type color, but keeps its
+shape, so facing direction stays visible either way. `/api/traffic_lights`
+gained a `signal_type` field to drive this (bumped
+`_SNAPSHOT_FORMAT_VERSION` to 3, same reasoning as the `facing_yaw` bump:
+old snapshots should fail loudly on `--load`, not silently render
+everything as "unknown").

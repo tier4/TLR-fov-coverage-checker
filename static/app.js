@@ -8,6 +8,12 @@ const STATUS_COLOR = {
 // Worst case drawn last (on top), matching visualizer.py's convention.
 const STATUS_DRAW_ORDER = ["covered", "facing_away", "out_of_fov"];
 
+const TYPE_COLOR = {
+  vehicle: "gold",
+  pedestrian: "#00bcd4",
+  unknown: "silver",
+};
+
 const mapCanvas = document.getElementById("map-canvas");
 const mapCtx = mapCanvas.getContext("2d");
 const frameCanvas = document.getElementById("frame-canvas");
@@ -78,55 +84,42 @@ function screenToWorld(sx, sy) {
   return [(sx - view.offsetX) / view.scale, -(sy - view.offsetY) / view.scale];
 }
 
-function drawStar(ctx, cx, cy, r, fillColor, strokeColor, strokeWidth) {
+// A traffic light marker: a triangle pointing in its facing_yaw direction
+// (bearing from the bulb centroid toward its stop line, i.e. the
+// direction the signal shines/points), or a plain circle when facing_yaw
+// is unknown (no ref_line in the map -- normally a pedestrian signal).
+// One solid filled shape rather than a separate thin arrow overlay: a
+// thin line degrades badly at small sizes/low zoom (sub-pixel width,
+// easy to lose against the background), while a filled wedge stays
+// legible and never "collapses" the way a 1px line can.
+//
+// facing_yaw is a world-space bearing; converting it to a screen-space
+// direction only needs negating the angle (screen y is flipped relative
+// to world y, and there's no rotation between the two), so this is done
+// directly rather than round-tripping through worldToScreen.
+function drawLightMarker(ctx, sx, sy, r, facingYawDeg, fillColor, strokeColor, strokeWidth) {
   ctx.beginPath();
-  for (let i = 0; i < 5; i++) {
-    const outerAngle = (Math.PI / 2) + (i * 2 * Math.PI) / 5;
-    const innerAngle = outerAngle + Math.PI / 5;
-    const ox = cx + r * Math.cos(outerAngle), oy = cy - r * Math.sin(outerAngle);
-    const ix = cx + (r * 0.45) * Math.cos(innerAngle), iy = cy - (r * 0.45) * Math.sin(innerAngle);
-    if (i === 0) ctx.moveTo(ox, oy); else ctx.lineTo(ox, oy);
-    ctx.lineTo(ix, iy);
+  if (facingYawDeg === null || facingYawDeg === undefined) {
+    ctx.arc(sx, sy, r, 0, 2 * Math.PI);
+  } else {
+    const dirAngle = -(facingYawDeg * Math.PI) / 180;
+    const tipLen = r * 1.7;
+    const backLen = r * 1.05;
+    const backSpread = (140 * Math.PI) / 180;
+    const vertex = (angle, len) => [sx + len * Math.cos(angle), sy + len * Math.sin(angle)];
+    const [tx, ty] = vertex(dirAngle, tipLen);
+    const [lx, ly] = vertex(dirAngle + backSpread, backLen);
+    const [rx, ry] = vertex(dirAngle - backSpread, backLen);
+    ctx.moveTo(tx, ty);
+    ctx.lineTo(lx, ly);
+    ctx.lineTo(rx, ry);
+    ctx.closePath();
   }
-  ctx.closePath();
   ctx.fillStyle = fillColor;
   ctx.fill();
   ctx.strokeStyle = strokeColor;
   ctx.lineWidth = strokeWidth;
   ctx.stroke();
-}
-
-// A short arrow from a traffic light's star showing the direction it
-// faces (facing_yaw: bearing from the bulb centroid toward its stop
-// line, i.e. the direction the signal shines/points). `length` is in
-// screen pixels, not world meters -- world dx/dy for a unit vector only
-// need scaling by view.scale (no rotation), and screen y is flipped
-// relative to world y, so this is simpler done directly in screen space
-// than round-tripping through worldToScreen.
-function drawFacingArrow(ctx, sx, sy, facingYawDeg, length, color) {
-  const yaw = (facingYawDeg * Math.PI) / 180;
-  const tx = sx + length * Math.cos(yaw);
-  const ty = sy - length * Math.sin(yaw);
-
-  ctx.save();
-  ctx.beginPath();
-  ctx.moveTo(sx, sy);
-  ctx.lineTo(tx, ty);
-  ctx.strokeStyle = color;
-  ctx.lineWidth = Math.max(1, length * 0.18);
-  ctx.stroke();
-
-  const screenAngle = Math.atan2(ty - sy, tx - sx);
-  const headLen = Math.max(2.5, length * 0.45);
-  const headAngle = Math.PI / 7;
-  ctx.beginPath();
-  ctx.moveTo(tx, ty);
-  ctx.lineTo(tx - headLen * Math.cos(screenAngle - headAngle), ty - headLen * Math.sin(screenAngle - headAngle));
-  ctx.lineTo(tx - headLen * Math.cos(screenAngle + headAngle), ty - headLen * Math.sin(screenAngle + headAngle));
-  ctx.closePath();
-  ctx.fillStyle = color;
-  ctx.fill();
-  ctx.restore();
 }
 
 function drawFrustum(ctx, point, camYawDeg, fovHDeg, minRange, maxRange) {
@@ -197,27 +190,25 @@ function renderMap() {
     );
   }
 
-  const starR = Math.max(3, Math.min(9, view.scale * 3));
-  const highlightR = starR * 1.8;
+  const markerR = Math.max(3, Math.min(9, view.scale * 3));
+  const highlightR = markerR * 1.8;
 
-  // plain stars first, highlighted ones (candidates of the selected point)
-  // drawn last/on top so they're never hidden by an overlapping neighbor.
+  // plain markers first, highlighted ones (candidates of the selected
+  // point) drawn last/on top so they're never hidden by an overlapping
+  // neighbor. Color encodes signal_type normally; a highlighted marker's
+  // color instead encodes that candidate's status, but keeps its shape
+  // (triangle/circle) so facing direction stays visible either way.
   const highlighted = [];
   for (const tl of trafficLights) {
     if (highlightedLights.has(tl.id)) { highlighted.push(tl); continue; }
     const [sx, sy] = worldToScreen(tl.x, tl.y);
-    drawStar(ctx, sx, sy, starR, "gold", "black", 0.6);
-    if (tl.facing_yaw !== null && tl.facing_yaw !== undefined) {
-      drawFacingArrow(ctx, sx, sy, tl.facing_yaw, starR * 2.2, "#1a1a1a");
-    }
+    const fillColor = TYPE_COLOR[tl.signal_type] || TYPE_COLOR.unknown;
+    drawLightMarker(ctx, sx, sy, markerR, tl.facing_yaw, fillColor, "black", 0.6);
   }
   for (const tl of highlighted) {
     const [sx, sy] = worldToScreen(tl.x, tl.y);
     const color = highlightedLights.get(tl.id);
-    drawStar(ctx, sx, sy, highlightR, color, "black", 2.2);
-    if (tl.facing_yaw !== null && tl.facing_yaw !== undefined) {
-      drawFacingArrow(ctx, sx, sy, tl.facing_yaw, highlightR * 2.2, "#1a1a1a");
-    }
+    drawLightMarker(ctx, sx, sy, highlightR, tl.facing_yaw, color, "black", 2.2);
   }
 
   if (selectedPointId !== null) {

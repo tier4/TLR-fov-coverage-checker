@@ -160,23 +160,13 @@ main {
   margin-right: 4px;
 }
 
-.legend .star {
-  display: inline-block;
-  width: 9px;
-  height: 9px;
-  background: gold;
-  border: 1px solid black;
-  margin-right: 4px;
-  transform: rotate(45deg);
-}
-
-.legend .arrow {
+.legend .tri {
   display: inline-block;
   width: 0;
   height: 0;
-  border-top: 4px solid transparent;
-  border-bottom: 4px solid transparent;
-  border-left: 8px solid #1a1a1a;
+  border-top: 5px solid transparent;
+  border-bottom: 5px solid transparent;
+  border-left: 9px solid gold;
   margin-right: 4px;
 }
 

@@ -135,7 +135,13 @@ def test_traffic_lights_endpoint(client):
     res = client.get("/api/traffic_lights")
     data = res.get_json()
     assert data == [
-        {"id": "900", "x": pytest.approx(150.25), "y": pytest.approx(202.0), "facing_yaw": pytest.approx(180.0)}
+        {
+            "id": "900",
+            "x": pytest.approx(150.25),
+            "y": pytest.approx(202.0),
+            "facing_yaw": pytest.approx(180.0),
+            "signal_type": "vehicle",
+        }
     ]
 
 

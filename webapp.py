@@ -45,7 +45,7 @@ app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="")
 # Populated once by _load_data() or _deserialize_state() before the server
 # starts serving requests.
 _state: dict = {}
-_SNAPSHOT_FORMAT_VERSION = 2  # bumped when tl_facing_yaw was added to the schema
+_SNAPSHOT_FORMAT_VERSION = 3  # bumped when tl_signal_type was added to the schema
 
 
 def _build_lane_yaw_lookup(lanes: list[LanePath]) -> dict[str, dict[tuple[float, float], float]]:
@@ -81,6 +81,7 @@ def _load_data(map_path: Path, camera: CameraSpec, signal_types: set[str] | None
 
     tl_positions = {tl.id: calc_centroid(tl.bulbs) for tl in traffic_lights if tl.bulbs}
     tl_facing_yaw = {tl.id: tl.facing_yaw for tl in traffic_lights if tl.bulbs}
+    tl_signal_type = {tl.id: tl.signal_type for tl in traffic_lights if tl.bulbs}
     yaw_lookup = _build_lane_yaw_lookup(lanes)
 
     points: list[dict] = []
@@ -106,6 +107,7 @@ def _load_data(map_path: Path, camera: CameraSpec, signal_types: set[str] | None
         results_by_point=results_by_point,
         tl_positions=tl_positions,
         tl_facing_yaw=tl_facing_yaw,
+        tl_signal_type=tl_signal_type,
         yaw_lookup=yaw_lookup,
         lane_count=len(lanes),
         traffic_light_count=len(traffic_lights),
@@ -148,6 +150,7 @@ def _serialize_state() -> dict:
         },
         "tl_positions": {tl_id: {"x": p.x, "y": p.y, "z": p.z} for tl_id, p in _state["tl_positions"].items()},
         "tl_facing_yaw": _state["tl_facing_yaw"],
+        "tl_signal_type": _state["tl_signal_type"],
         "yaw_lookup": {
             lane_id: [[x, y, yaw] for (x, y), yaw in per_lane.items()]
             for lane_id, per_lane in _state["yaw_lookup"].items()
@@ -170,6 +173,7 @@ def _deserialize_state(data: dict) -> None:
     points = data["points"]
     tl_positions = {tl_id: Point3D(**pos) for tl_id, pos in data["tl_positions"].items()}
     tl_facing_yaw = data["tl_facing_yaw"]
+    tl_signal_type = data["tl_signal_type"]
     yaw_lookup = {
         lane_id: {(x, y): yaw for x, y, yaw in entries} for lane_id, entries in data["yaw_lookup"].items()
     }
@@ -200,6 +204,7 @@ def _deserialize_state(data: dict) -> None:
         results_by_point=results_by_point,
         tl_positions=tl_positions,
         tl_facing_yaw=tl_facing_yaw,
+        tl_signal_type=tl_signal_type,
         yaw_lookup=yaw_lookup,
         lane_count=data["lane_count"],
         traffic_light_count=data["traffic_light_count"],
@@ -272,9 +277,16 @@ def points():
 @app.route("/api/traffic_lights")
 def traffic_lights():
     tl_facing_yaw = _state["tl_facing_yaw"]
+    tl_signal_type = _state["tl_signal_type"]
     return jsonify(
         [
-            {"id": tl_id, "x": pos.x, "y": pos.y, "facing_yaw": tl_facing_yaw.get(tl_id)}
+            {
+                "id": tl_id,
+                "x": pos.x,
+                "y": pos.y,
+                "facing_yaw": tl_facing_yaw.get(tl_id),
+                "signal_type": tl_signal_type.get(tl_id, "unknown"),
+            }
             for tl_id, pos in _state["tl_positions"].items()
         ]
     )
