@@ -5,6 +5,10 @@ needed, an already-parsed node table) and returns plain dataclass
 instances. No file I/O happens here, which is what lets the unit tests
 feed in small hand-written XML strings instead of touching disk.
 
+The full reverse-engineered format description -- including parts of the
+schema this module does NOT consume yet, like per-bulb color/arrow tags
+and lanelet turn_direction -- lives in docs/map_schema.md.
+
 Schema notes (confirmed against a real Lanelet2 export):
   - <node> coordinates live in <tag k="local_x"/"local_y"/"ele">.
   - A lane is a <relation type="lanelet" subtype="road"> with

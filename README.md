@@ -363,3 +363,9 @@ real files, so they run without any map data present.
 See `docs/behavior.md` for output quirks that look like bugs but aren't
 (and the one that was: the plot used to omit mid-block road stretches
 outside every light's range, making the map look disconnected).
+
+See `docs/map_schema.md` for everything this project has reverse-
+engineered about the Lanelet2 .osm format itself -- node/way/relation
+structure, how signal housings and individual lamps (colors, arrow
+directions) are encoded, which fields the tool consumes, and what the
+map does *not* contain (notably: no signal phase/timing data).
