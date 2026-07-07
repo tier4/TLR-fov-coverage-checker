@@ -80,9 +80,10 @@ with the bulb centroid, to derive the signal's facing direction.
   6,735 tagged bulbs on this map) **and arrow lamps additionally carry
   an `arrow` tag** (`right` 604, `up` 310, `left` 281, `straight` 12).
   So the full lamp pattern of every head -- including which arrow
-  directions it can show -- is recoverable from the map. This tool
-  currently uses bulb positions only (centroid = the light's location);
-  colors/arrows are available but unused.
+  directions it can show -- is recoverable from the map. **[used: the
+  viewer's camera view projects each bulb individually and draws it as
+  a colored lens (arrow glyph for arrow lamps), simulating the light's
+  actual appearance; only the lens diameter (~0.3m) is assumed]**
 - `traffic_light_id` points at the panel way (`type=traffic_light`)
   this head belongs to -- consistent on all 1,974 tagged heads here.
   This matters because one regulatory element can bundle several

@@ -17,6 +17,17 @@ class Point3D:
 
 
 @dataclass(frozen=True)
+class Lamp:
+    """One physical bulb of a traffic light: its exact mapped position plus
+    the `color` / `arrow` tags its node carries (see docs/map_schema.md).
+    """
+
+    pos: Point3D
+    color: str | None = None  # "red" | "yellow" | "green" | None if untagged
+    arrow: str | None = None  # "up" | "left" | "right" | "straight" | None for a plain lens
+
+
+@dataclass(frozen=True)
 class TrafficLight:
     id: str
     bulbs: list[Point3D]
@@ -26,6 +37,7 @@ class TrafficLight:
     stop_line_pos: Point3D | None = None  # ref_line way midpoint, or None if this light has no ref_line
     panel_width: float | None = None  # [m] housing width: distance between the `refers` panel way's endpoints
     panel_height: float | None = None  # [m] housing height: the panel way's `height` tag
+    lamps: tuple[Lamp, ...] = ()  # same bulbs as `bulbs`, with their color/arrow tags attached
 
 
 @dataclass(frozen=True)

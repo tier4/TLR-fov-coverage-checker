@@ -46,7 +46,7 @@ app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="")
 # Populated once by _load_data() or _deserialize_state() before the server
 # starts serving requests.
 _state: dict = {}
-_SNAPSHOT_FORMAT_VERSION = 5  # bumped when tl_panel_size was added to the schema
+_SNAPSHOT_FORMAT_VERSION = 6  # bumped when tl_lamps was added to the schema
 
 
 def _build_lane_yaw_lookup(lanes: list[LanePath]) -> dict[str, dict[tuple[float, float], float]]:
@@ -87,6 +87,14 @@ def _load_from_xml(xml_string: str, camera: CameraSpec, signal_types: set[str] |
     tl_facing_yaw = {tl.id: tl.facing_yaw for tl in traffic_lights if tl.bulbs}
     tl_signal_type = {tl.id: tl.signal_type for tl in traffic_lights if tl.bulbs}
     tl_panel_size = {tl.id: [tl.panel_width, tl.panel_height] for tl in traffic_lights if tl.bulbs}
+    tl_lamps = {
+        tl.id: [
+            {"x": lamp.pos.x, "y": lamp.pos.y, "z": lamp.pos.z, "color": lamp.color, "arrow": lamp.arrow}
+            for lamp in tl.lamps
+        ]
+        for tl in traffic_lights
+        if tl.bulbs
+    }
     yaw_lookup = _build_lane_yaw_lookup(lanes)
     latlon_transform = parse_latlon_transform(xml_string)
 
@@ -117,6 +125,7 @@ def _load_from_xml(xml_string: str, camera: CameraSpec, signal_types: set[str] |
         tl_facing_yaw=tl_facing_yaw,
         tl_signal_type=tl_signal_type,
         tl_panel_size=tl_panel_size,
+        tl_lamps=tl_lamps,
         yaw_lookup=yaw_lookup,
         latlon_transform=latlon_transform,
         lane_count=len(lanes),
@@ -165,6 +174,7 @@ def _serialize_state() -> dict:
         "tl_facing_yaw": _state["tl_facing_yaw"],
         "tl_signal_type": _state["tl_signal_type"],
         "tl_panel_size": _state["tl_panel_size"],
+        "tl_lamps": _state["tl_lamps"],
         "yaw_lookup": {
             lane_id: [[x, y, yaw] for (x, y), yaw in per_lane.items()]
             for lane_id, per_lane in _state["yaw_lookup"].items()
@@ -189,6 +199,7 @@ def _deserialize_state(data: dict) -> None:
     tl_facing_yaw = data["tl_facing_yaw"]
     tl_signal_type = data["tl_signal_type"]
     tl_panel_size = data["tl_panel_size"]
+    tl_lamps = data["tl_lamps"]
     yaw_lookup = {
         lane_id: {(x, y): yaw for x, y, yaw in entries} for lane_id, entries in data["yaw_lookup"].items()
     }
@@ -223,6 +234,7 @@ def _deserialize_state(data: dict) -> None:
         tl_facing_yaw=tl_facing_yaw,
         tl_signal_type=tl_signal_type,
         tl_panel_size=tl_panel_size,
+        tl_lamps=tl_lamps,
         yaw_lookup=yaw_lookup,
         latlon_transform=data["latlon_transform"],
         lane_count=data["lane_count"],
@@ -364,11 +376,24 @@ def point_candidates(point_id: int):
     group_covered = {r.group_id for r in point_results if r.is_covered}
 
     tl_panel_size = _state["tl_panel_size"]
+    tl_lamps = _state["tl_lamps"]
     candidates = []
     for r in point_results:
         target_pos = _state["tl_positions"][r.target_tl_id]
         yaw_diff, pitch_diff = calc_camera_frame_offset(cam_pos, cam_yaw, 0.0, target_pos)
         panel_width, panel_height = tl_panel_size.get(r.target_tl_id) or (None, None)
+
+        # each physical bulb projected individually, so the frontend can
+        # draw the true lamp arrangement (incl. foreshortening when the
+        # housing is seen at an angle) instead of a symbolic box alone
+        lamps = []
+        for lamp in tl_lamps.get(r.target_tl_id, []):
+            lamp_pos = Point3D(lamp["x"], lamp["y"], lamp["z"])
+            lamp_yaw, lamp_pitch = calc_camera_frame_offset(cam_pos, cam_yaw, 0.0, lamp_pos)
+            lamps.append(
+                {"yaw_diff": lamp_yaw, "pitch_diff": lamp_pitch, "color": lamp["color"], "arrow": lamp["arrow"]}
+            )
+
         candidates.append(
             {
                 "target_tl_id": r.target_tl_id,
@@ -385,6 +410,7 @@ def point_candidates(point_id: int):
                 "norm_y": pitch_diff / (camera.fov_v / 2.0),
                 "panel_width": panel_width,
                 "panel_height": panel_height,
+                "lamps": lamps,
             }
         )
 

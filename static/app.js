@@ -28,6 +28,17 @@ const SIGNAL_HOUSING_M = {
   unknown: { w: 0.45, h: 0.45 },
 };
 
+// Lens diameter [m] for drawing individual lamps in the camera view. The
+// map gives each bulb's exact position and color/arrow tags but not the
+// lens size; 0.3m is the standard Japanese 300mm lens. A stated guess,
+// unlike the lamp positions themselves.
+const LENS_DIAMETER_M = 0.3;
+const LAMP_COLOR = {
+  red: "#ff4136",
+  yellow: "#ffdc00",
+  green: "#2ecc71",
+};
+
 const mapCanvas = document.getElementById("map-canvas");
 const mapCtx = mapCanvas.getContext("2d");
 const frameCanvas = document.getElementById("frame-canvas");
@@ -556,16 +567,61 @@ function renderFrame(detail) {
     ctx.lineWidth = 1;
     ctx.strokeRect(sx - rw / 2, sy - rh / 2, rw, rh);
 
-    // center dot so a far light (housing well below marker size) stays visible
-    ctx.beginPath();
-    ctx.arc(sx, sy, 2.5, 0, 2 * Math.PI);
-    ctx.fillStyle = color;
-    ctx.fill();
+    // Individual lamps at their true projected positions (each bulb is
+    // mapped and projected separately, so an obliquely-viewed housing
+    // shows its lamp row foreshortened, like a real camera image would).
+    // Lens diameter is the one guessed quantity (LENS_DIAMETER_M).
+    if (c.lamps && c.lamps.length) {
+      const lensDeg = 2 * Math.atan2(LENS_DIAMETER_M / 2, c.distance_m) * (180 / Math.PI);
+      const lensR = Math.max(1.2, (lensDeg * pxPerDeg) / 2);
+      for (const lamp of c.lamps) {
+        const [lx, ly] = toScreen(lamp.yaw_diff, lamp.pitch_diff);
+        ctx.beginPath();
+        ctx.arc(lx, ly, lensR, 0, 2 * Math.PI);
+        ctx.fillStyle = LAMP_COLOR[lamp.color] || "#999";
+        ctx.fill();
+        ctx.strokeStyle = "#222";
+        ctx.lineWidth = Math.max(0.5, lensR * 0.15);
+        ctx.stroke();
+        if (lamp.arrow) drawLampArrow(ctx, lx, ly, lensR, lamp.arrow);
+      }
+    } else {
+      // no lamp detail (old snapshot): keep a small center dot visible
+      ctx.beginPath();
+      ctx.arc(sx, sy, 2.5, 0, 2 * Math.PI);
+      ctx.fillStyle = color;
+      ctx.fill();
+    }
 
     ctx.fillStyle = "white";
     ctx.font = "10px sans-serif";
     ctx.fillText(`${c.target_tl_id} (${c.distance_m.toFixed(0)}m)`, sx + Math.max(8, rw / 2 + 4), sy - Math.max(8, rh / 2 + 4));
   }
+}
+
+// A small directional glyph inside an arrow lamp's lens. Arrow lamps are
+// dark housings with a lit green arrow, so the lens circle itself is
+// drawn in the lamp's color tag and this glyph shows which direction it
+// points ("straight" is drawn as "up": both mean dead ahead).
+function drawLampArrow(ctx, cx, cy, r, direction) {
+  const angle = { up: -Math.PI / 2, straight: -Math.PI / 2, right: 0, left: Math.PI }[direction];
+  if (angle === undefined) return;
+  const len = r * 0.75;
+  const tipX = cx + len * Math.cos(angle), tipY = cy + len * Math.sin(angle);
+  const tailX = cx - len * Math.cos(angle), tailY = cy - len * Math.sin(angle);
+  ctx.save();
+  ctx.strokeStyle = "#111";
+  ctx.lineWidth = Math.max(1, r * 0.22);
+  ctx.beginPath();
+  ctx.moveTo(tailX, tailY);
+  ctx.lineTo(tipX, tipY);
+  const headAngle = Math.PI / 5, headLen = r * 0.5;
+  ctx.moveTo(tipX, tipY);
+  ctx.lineTo(tipX - headLen * Math.cos(angle - headAngle), tipY - headLen * Math.sin(angle - headAngle));
+  ctx.moveTo(tipX, tipY);
+  ctx.lineTo(tipX - headLen * Math.cos(angle + headAngle), tipY - headLen * Math.sin(angle + headAngle));
+  ctx.stroke();
+  ctx.restore();
 }
 
 function setupMapInteraction() {

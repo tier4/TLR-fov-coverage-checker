@@ -238,6 +238,25 @@ def test_parse_traffic_lights_panel_width_none_when_panel_nodes_unresolvable():
     assert tl.panel_height == pytest.approx(0.45)
 
 
+def test_parse_traffic_lights_lamps_carry_color_and_position():
+    # bulb nodes 10 (color=red) and 11 (color=yellow) in document order
+    nodes = parse_nodes(MOCK_XML)
+    tl = parse_traffic_lights(MOCK_XML, nodes)[0]
+    assert len(tl.lamps) == 2
+    assert tl.lamps[0].color == "red"
+    assert tl.lamps[0].pos == Point3D(150.0, 202.0, 10.0)
+    assert tl.lamps[1].color == "yellow"
+    assert tl.lamps[0].arrow is None
+
+
+def test_parse_traffic_lights_lamps_carry_arrow_tag():
+    xml = MOCK_XML.replace('<tag k="color" v="yellow"/>', '<tag k="color" v="green"/><tag k="arrow" v="right"/>')
+    nodes = parse_nodes(xml)
+    tl = parse_traffic_lights(xml, nodes)[0]
+    assert tl.lamps[1].color == "green"
+    assert tl.lamps[1].arrow == "right"
+
+
 def test_parse_traffic_lights_ignores_non_traffic_light_relations():
     xml = MOCK_XML.replace('v="traffic_light"', 'v="traffic_sign"')
     nodes = parse_nodes(xml)

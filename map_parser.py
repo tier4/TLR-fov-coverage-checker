@@ -47,7 +47,7 @@ import xml.etree.ElementTree as ET
 import numpy as np
 
 from geometry_calculator import calc_center_line, calc_centroid, calc_distance_3d, calc_heading_yaw
-from models import LanePath, Point3D, TrafficLight
+from models import Lamp, LanePath, Point3D, TrafficLight
 
 _VEHICLE_SUBTYPES = {"red_yellow_green"}
 _PEDESTRIAN_SUBTYPES = {"red_green"}
@@ -164,6 +164,7 @@ def parse_traffic_lights(xml_string: str, nodes: dict[str, Point3D]) -> list[Tra
     root = ET.fromstring(xml_string)
     ways = _parse_ways(root)
     way_elems = _index_way_elements(root)
+    node_elems = {n.get("id"): n for n in root.findall("node") if n.get("id") is not None}
     traffic_lights: list[TrafficLight] = []
     for rel_elem in root.findall("relation"):
         if _get_tag(rel_elem, "subtype") != "traffic_light":
@@ -173,6 +174,7 @@ def parse_traffic_lights(xml_string: str, nodes: dict[str, Point3D]) -> list[Tra
             continue
 
         bulbs: list[Point3D] = []
+        lamps: list[Lamp] = []
         refers_ref: str | None = None
         ref_line_ref: str | None = None
         for member in rel_elem.findall("member"):
@@ -182,6 +184,14 @@ def parse_traffic_lights(xml_string: str, nodes: dict[str, Point3D]) -> list[Tra
                     point = nodes.get(node_id)
                     if point is not None:
                         bulbs.append(point)
+                        node_elem = node_elems.get(node_id)
+                        lamps.append(
+                            Lamp(
+                                pos=point,
+                                color=_get_tag(node_elem, "color") if node_elem is not None else None,
+                                arrow=_get_tag(node_elem, "arrow") if node_elem is not None else None,
+                            )
+                        )
             elif role == "refers" and refers_ref is None:
                 refers_ref = member.get("ref")
             elif role == "ref_line" and ref_line_ref is None:
@@ -234,6 +244,7 @@ def parse_traffic_lights(xml_string: str, nodes: dict[str, Point3D]) -> list[Tra
                 stop_line_pos=stop_line_pos,
                 panel_width=panel_width,
                 panel_height=panel_height,
+                lamps=tuple(lamps),
             )
         )
     return traffic_lights

@@ -628,6 +628,32 @@ at the angular size of an assumed housing at that distance
 (`2*atan(size/2 / distance)`), farthest-first so a nearer light paints
 over a farther one in the same occlusion order a camera would see.
 
+**Lamp-level rendering** (follow-up): the bulb nodes' `color`/`arrow`
+tags plus their exact mapped positions (see docs/map_schema.md) now
+drive a real appearance simulation inside each housing box: every lamp
+is projected into the frame *individually* (`lamps` per candidate in the
+API, snapshot v6) and drawn as a colored lens circle -- red/yellow/green
+-- with a directional glyph on arrow lamps. Because each bulb is
+projected separately rather than offset from the housing center, an
+obliquely-viewed housing shows its lamp row foreshortened exactly as a
+camera would see it. The single guessed quantity is the lens diameter
+(`LENS_DIAMETER_M` = 0.3m, the standard Japanese 300mm lens); positions,
+colors and arrow directions are all map data. Verified on the real map:
+a covered signal at 66m renders as green/yellow/red on top and
+left/up/right green arrows below -- the standard Japanese 3+3 housing --
+matching its mapped bulbs one-for-one.
+
+One honest wrinkle this made visible: a regulatory element usually
+bundles *several* physical heads (2-4 on most -- see map_schema.md), and
+the simulation treats them as one light at the pooled bulb centroid.
+With lamps drawn at their true positions, that pooling shows: the
+status box (drawn at the centroid) can float between two lamp clusters,
+at a spot where no physical housing exists, and the in-FOV judgment is
+made for that centroid rather than per head. Splitting per-head (the
+`traffic_light_id` back-references make it possible) would be a real
+simulation-semantics change, not just cosmetics -- left as known future
+work.
+
 The housing sizes were initially stated assumptions -- until the user
 pointed out the map itself carries them, which checked out completely:
 the `refers` panel way is a linestring spanning the housing's physical

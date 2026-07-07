@@ -248,6 +248,22 @@ def test_point_candidates_include_panel_size_from_map(client):
     assert c["panel_height"] == pytest.approx(0.45)
 
 
+def test_point_candidates_include_projected_lamps(client):
+    data = client.get("/api/points/0/candidates").get_json()
+    c = data["candidates"][0]
+    # bulb nodes 10 (red) and 11 (yellow), each projected individually
+    assert [lamp["color"] for lamp in c["lamps"]] == ["red", "yellow"]
+    assert all(lamp["arrow"] is None for lamp in c["lamps"])
+    # the mock lane looks due east and both bulbs sit exactly on the view
+    # axis (y=202), so each projects to dead-center horizontally...
+    assert all(lamp["yaw_diff"] == pytest.approx(0.0) for lamp in c["lamps"])
+    # ...but the second bulb is 0.5m farther away, so its elevation angle
+    # (same z, longer distance) must be slightly shallower -- individual
+    # projection, not one shared offset for the whole light
+    pitches = [lamp["pitch_diff"] for lamp in c["lamps"]]
+    assert pitches[0] > pitches[1]
+
+
 def test_meta_includes_latlon_transform(client):
     data = client.get("/api/meta").get_json()
     # MOCK_XML's nodes all carry lat/lon attributes, so a fit must exist

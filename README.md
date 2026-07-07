@@ -130,10 +130,18 @@ housing's width; its `height` tag gives the vertical size -- every
 signal on the bundled map carries both, including a handful of vertical
 snow-region housings a fixed assumption would get wrong). Farthest
 drawn first so a nearer light paints over a farther one the way a
-camera would see it; a small center dot keeps very distant lights
-visible even when their box shrinks below a few pixels. Typical-housing
-constants (vehicle ~1.25x0.45m, pedestrian ~0.45x0.9m) are used only
-for maps that lack the size data.
+camera would see it. Typical-housing constants (vehicle ~1.25x0.45m,
+pedestrian ~0.45x0.9m) are used only for maps that lack the size data.
+
+Inside each box, the light's individual lamps are drawn at their true
+projected positions with their mapped colors -- red/yellow/green lens
+circles, plus a directional glyph on arrow lamps (`arrow` tag:
+left/up/right) -- so zooming into a candidate shows approximately what
+the camera would actually see, including the lamp row foreshortening
+when a housing is viewed at an angle. Lamp positions, colors and arrow
+directions are all real map data (see `docs/map_schema.md`); the one
+assumed value is the lens diameter (0.3m, the standard Japanese 300mm
+lens).
 
 Available settings (CLI flag / YAML key under `camera:`):
 
