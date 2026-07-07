@@ -46,6 +46,15 @@ Takes the same `--map`/`--config`/camera flags as `main.py`, plus `--port`.
 It's a fixed-camera-spec viewer (no live FOV sliders) -- restart with
 different flags to inspect a different camera spec.
 
+Both panes support scroll-to-zoom and drag-to-pan (double-click the
+camera-view panel to reset it back to auto-fit). Selecting a point also
+draws its FOV frustum on the map itself -- a blue wedge from `min_range`
+to `max_range` spanning `fov_h`, with a dashed line down the middle showing
+`cam_yaw` (the lane's direction of travel at that point) -- and enlarges
+its candidate traffic lights' stars, colored by that candidate's status,
+so it's clear at a glance which star(s) on the map the camera-view panel
+is showing.
+
 CLI flags always take precedence over a `--config` YAML, which takes
 precedence over built-in defaults (`CameraSpec` in `models.py`).
 

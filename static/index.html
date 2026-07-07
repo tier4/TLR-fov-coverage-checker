@@ -15,6 +15,9 @@
     <section id="map-pane">
       <div class="pane-title">
         Map &mdash; click a point to inspect it. Drag to pan, scroll to zoom.
+        Selected point shows its FOV frustum (blue wedge, dashed line = travel
+        direction) and highlights its candidate lights (bigger, colored by
+        status).
       </div>
       <canvas id="map-canvas"></canvas>
       <div id="map-legend" class="legend">
@@ -26,7 +29,9 @@
     </section>
 
     <section id="detail-pane">
-      <div class="pane-title">Camera view at selected point</div>
+      <div class="pane-title">
+        Camera view at selected point &mdash; drag to pan, scroll to zoom, double-click to reset.
+      </div>
       <canvas id="frame-canvas"></canvas>
       <div id="point-info">Select a point on the map.</div>
       <table id="candidate-table">

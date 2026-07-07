@@ -19,9 +19,16 @@ const candidateTbody = document.querySelector("#candidate-table tbody");
 let points = [];
 let trafficLights = [];
 let selectedPointId = null;
+let currentDetail = null;
+let cameraSpec = null;
+// target_tl_id -> status color, for whichever point is currently selected
+let highlightedLights = new Map();
 
 // world <-> screen transform state for the map pane
 const view = { scale: 1, offsetX: 0, offsetY: 0 };
+
+// zoom/pan state for the camera-view (frame) pane, reset on each new point pick
+const frameView = { zoom: 1, panX: 0, panY: 0 };
 
 function resizeCanvases() {
   for (const c of [mapCanvas, frameCanvas]) {
@@ -67,7 +74,7 @@ function screenToWorld(sx, sy) {
   return [(sx - view.offsetX) / view.scale, -(sy - view.offsetY) / view.scale];
 }
 
-function drawStar(ctx, cx, cy, r) {
+function drawStar(ctx, cx, cy, r, fillColor, strokeColor, strokeWidth) {
   ctx.beginPath();
   for (let i = 0; i < 5; i++) {
     const outerAngle = (Math.PI / 2) + (i * 2 * Math.PI) / 5;
@@ -78,11 +85,51 @@ function drawStar(ctx, cx, cy, r) {
     ctx.lineTo(ix, iy);
   }
   ctx.closePath();
-  ctx.fillStyle = "gold";
+  ctx.fillStyle = fillColor;
   ctx.fill();
-  ctx.strokeStyle = "black";
-  ctx.lineWidth = 0.6;
+  ctx.strokeStyle = strokeColor;
+  ctx.lineWidth = strokeWidth;
   ctx.stroke();
+}
+
+function drawFrustum(ctx, point, camYawDeg, fovHDeg, minRange, maxRange) {
+  const yaw = (camYawDeg * Math.PI) / 180;
+  const half = (fovHDeg / 2) * (Math.PI / 180);
+  const a0 = yaw - half, a1 = yaw + half;
+
+  const atAngle = (angle, dist) => worldToScreen(point.x + dist * Math.cos(angle), point.y + dist * Math.sin(angle));
+
+  const steps = 24;
+  const outerPts = [], innerPts = [];
+  for (let i = 0; i <= steps; i++) {
+    const a = a0 + ((a1 - a0) * i) / steps;
+    outerPts.push(atAngle(a, maxRange));
+    innerPts.push(atAngle(a, minRange));
+  }
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(outerPts[0][0], outerPts[0][1]);
+  for (const [x, y] of outerPts.slice(1)) ctx.lineTo(x, y);
+  for (const [x, y] of innerPts.reverse()) ctx.lineTo(x, y);
+  ctx.closePath();
+  ctx.fillStyle = "rgba(31, 119, 180, 0.15)";
+  ctx.fill();
+  ctx.strokeStyle = "rgba(31, 119, 180, 0.8)";
+  ctx.lineWidth = 1.5;
+  ctx.stroke();
+
+  // dashed heading line down the middle of the frustum, the direction of travel
+  const [sx, sy] = worldToScreen(point.x, point.y);
+  const [hx, hy] = atAngle(yaw, maxRange);
+  ctx.beginPath();
+  ctx.moveTo(sx, sy);
+  ctx.lineTo(hx, hy);
+  ctx.setLineDash([5, 4]);
+  ctx.strokeStyle = "rgba(31, 119, 180, 0.9)";
+  ctx.lineWidth = 1;
+  ctx.stroke();
+  ctx.restore();
 }
 
 function renderMap() {
@@ -102,10 +149,32 @@ function renderMap() {
     }
   }
 
+  if (selectedPointId !== null && currentDetail && cameraSpec) {
+    drawFrustum(
+      ctx,
+      points[selectedPointId],
+      currentDetail.cam_yaw,
+      cameraSpec.fov_h,
+      cameraSpec.min_range,
+      cameraSpec.max_range
+    );
+  }
+
   const starR = Math.max(3, Math.min(9, view.scale * 3));
+  const highlightR = starR * 1.8;
+
+  // plain stars first, highlighted ones (candidates of the selected point)
+  // drawn last/on top so they're never hidden by an overlapping neighbor.
+  const highlighted = [];
   for (const tl of trafficLights) {
+    if (highlightedLights.has(tl.id)) { highlighted.push(tl); continue; }
     const [sx, sy] = worldToScreen(tl.x, tl.y);
-    drawStar(ctx, sx, sy, starR);
+    drawStar(ctx, sx, sy, starR, "gold", "black", 0.6);
+  }
+  for (const tl of highlighted) {
+    const [sx, sy] = worldToScreen(tl.x, tl.y);
+    const color = highlightedLights.get(tl.id);
+    drawStar(ctx, sx, sy, highlightR, color, "black", 2.2);
   }
 
   if (selectedPointId !== null) {
@@ -131,10 +200,26 @@ function findNearestPoint(worldX, worldY) {
 
 async function selectPoint(pointId) {
   selectedPointId = pointId;
-  renderMap();
+  currentDetail = null;
+  highlightedLights = new Map();
+  frameView.zoom = 1;
+  frameView.panX = 0;
+  frameView.panY = 0;
+  renderMap(); // selection ring right away; frustum/highlights follow once detail arrives
+
   const res = await fetch(`/api/points/${pointId}/candidates`);
   if (!res.ok) return;
   const detail = await res.json();
+
+  currentDetail = detail;
+  highlightedLights = new Map(
+    detail.candidates.map((c) => [
+      c.target_tl_id,
+      c.is_covered ? STATUS_COLOR.covered : c.in_fov ? STATUS_COLOR.facing_away : STATUS_COLOR.out_of_fov,
+    ])
+  );
+
+  renderMap();
   renderFrame(detail);
   renderPointInfo(detail);
   renderCandidateTable(detail);
@@ -176,7 +261,7 @@ function renderFrame(detail) {
   ctx.clearRect(0, 0, frameCanvas.width, frameCanvas.height);
 
   const w = frameCanvas.width, h = frameCanvas.height;
-  const cx = w / 2, cy = h / 2;
+  const cx = w / 2 + frameView.panX, cy = h / 2 + frameView.panY;
 
   // auto-fit the plotted range to whatever is farthest off-axis, at least the FOV itself
   let maxAbs = 1.0;
@@ -184,7 +269,7 @@ function renderFrame(detail) {
     maxAbs = Math.max(maxAbs, Math.abs(c.norm_x), Math.abs(c.norm_y));
   }
   const range = Math.max(1.3, maxAbs * 1.2);
-  const scale = Math.min(w, h) / 2 / range;
+  const scale = (Math.min(w, h) / 2 / range) * frameView.zoom;
 
   const toScreen = (nx, ny) => [cx + nx * scale, cy - ny * scale];
 
@@ -267,6 +352,40 @@ function setupMapInteraction() {
   });
 }
 
+function setupFrameInteraction() {
+  let dragging = false, lastX = 0, lastY = 0;
+
+  frameCanvas.addEventListener("mousedown", (e) => {
+    dragging = true;
+    lastX = e.clientX; lastY = e.clientY;
+  });
+  window.addEventListener("mouseup", () => { dragging = false; });
+  window.addEventListener("mousemove", (e) => {
+    if (!dragging || !currentDetail) return;
+    frameView.panX += (e.clientX - lastX) * devicePixelRatio;
+    frameView.panY += (e.clientY - lastY) * devicePixelRatio;
+    lastX = e.clientX; lastY = e.clientY;
+    renderFrame(currentDetail);
+  });
+
+  frameCanvas.addEventListener("wheel", (e) => {
+    e.preventDefault();
+    if (!currentDetail) return;
+    const factor = e.deltaY < 0 ? 1.2 : 1 / 1.2;
+    frameView.zoom = Math.max(0.1, Math.min(50, frameView.zoom * factor));
+    renderFrame(currentDetail);
+  }, { passive: false });
+
+  // double-click resets zoom/pan back to the auto-fit view
+  frameCanvas.addEventListener("dblclick", () => {
+    if (!currentDetail) return;
+    frameView.zoom = 1;
+    frameView.panX = 0;
+    frameView.panY = 0;
+    renderFrame(currentDetail);
+  });
+}
+
 async function main() {
   try {
     const [metaRes, pointsRes, lightsRes] = await Promise.all([
@@ -278,6 +397,7 @@ async function main() {
     const meta = await metaRes.json();
     points = await pointsRes.json();
     trafficLights = await lightsRes.json();
+    cameraSpec = meta.camera;
 
     metaEl.textContent =
       `${meta.lane_count} lanes | ${meta.traffic_light_count} traffic lights | ${meta.point_count} evaluated waypoints | ` +
@@ -288,6 +408,7 @@ async function main() {
     fitViewToData();
     renderMap();
     setupMapInteraction();
+    setupFrameInteraction();
     window.addEventListener("resize", () => { resizeCanvases(); renderMap(); });
   } catch (err) {
     // Surface failures in the page itself -- a silently rejected promise
