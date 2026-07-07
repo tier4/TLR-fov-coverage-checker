@@ -277,3 +277,50 @@ visible doesn't tell a driver/camera anything about the signal state at
 worth clicking it in the viewer and checking the `group_id` column: same
 group with different outcomes would be a bug; different groups is
 expected and, per this feature's own definition, correct.
+
+## Investigated: could some lanelets be digitized backwards?
+
+**Concern raised:** the FOV frustum drawn on a selected point sometimes
+looked like it was pointing the wrong way relative to the visible lane
+geometry, raising the question of whether `run_simulation`'s heading
+(`calc_heading_yaw` between consecutive `LanePath.center_line` points,
+which follows the `left`/`right` way node order straight from the source
+XML) could be backwards for some lanelets -- i.e. whether the map's own
+digitization sometimes violates the Lanelet2 convention that boundary-way
+node order follows the direction of travel.
+
+**First pass (misleading):** compared each stop-line-adjacent lanelet's
+computed heading against the opposite of its traffic light's `facing_yaw`
+(the same check used to validate `facing_yaw` itself, see above). Using a
+crude "nearest lanelet endpoint within 5m of the stop line, searched
+across every lanelet in the map" match: 571 pairs, median error 7.7
+degrees, but a distinctly separate cluster of 41 pairs (7.2%) with error
+>150 degrees -- a bimodal split that looked exactly like what a reversed
+lanelet would produce (correct heading + opposite facing_yaw = ~180
+degrees off, not a smooth spread of noise).
+
+**Second pass (the actual answer):** picked the cleanest of those 41
+outliers (lane `2294073`, `turn_direction=left`, endpoint only 2.43m from
+its stop line) and checked its topology directly: does its boundary way's
+first/last node line up with neighboring lanelets' endpoints to form a
+coherent route? It does -- `2293840` ends exactly where `2294073` begins,
+and `2294073` ends exactly where `2293842` begins. A three-lanelet chain
+digitized start-to-end consistently, no reversal.
+
+That means the 41-pair cluster is much more likely an artifact of the
+*matching* heuristic (a left-turn lanelet's endpoint happening to sit
+within 5m of a stop line that isn't actually the one controlling it, e.g.
+the through-lane's or the opposing direction's), not evidence that
+`run_simulation`'s own heading computation is wrong. Since the production
+pipeline never uses this "nearest endpoint" matching at all (it only
+takes each `LanePath`'s own consecutive points, whatever `parse_lanes`
+produced from that lanelet's own `left`/`right` ways), this investigation
+didn't turn up a concrete bug to fix.
+
+**Still open:** this checked one example out of 41 flagged pairs, not all
+of them, and it can't rule out a genuinely reversed lanelet existing
+elsewhere in a 5234-lanelet map. If you see the frustum pointing the wrong
+way again, click the point in the viewer, read off its `lane_id` from the
+point-info line, and report that specific id -- checking one concrete
+lanelet's topology (as above) is fast and conclusive; searching blindly
+for "some lanelet somewhere" is not.
