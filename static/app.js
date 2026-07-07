@@ -14,6 +14,19 @@ const TYPE_COLOR = {
   unknown: "silver",
 };
 
+// Assumed physical housing size [m] used to draw each candidate's apparent
+// (angular) size in the camera view. Japanese signal conventions: a vehicle
+// signal is a horizontal 3-lamp housing with 300mm lenses (~1.25m wide x
+// 0.45m tall); a pedestrian signal is a vertical 2-lamp housing (~0.45m
+// wide x 0.9m tall). Assumptions, not map data -- the map records bulb
+// positions, not housing outlines -- so treat the rectangles as "roughly
+// this many degrees of the image", not exact silhouettes.
+const SIGNAL_HOUSING_M = {
+  vehicle: { w: 1.25, h: 0.45 },
+  pedestrian: { w: 0.45, h: 0.9 },
+  unknown: { w: 0.45, h: 0.45 },
+};
+
 const mapCanvas = document.getElementById("map-canvas");
 const mapCtx = mapCanvas.getContext("2d");
 const frameCanvas = document.getElementById("frame-canvas");
@@ -516,19 +529,37 @@ function renderFrame(detail) {
   ctx.fillText("L", rx0 + 4, cy - 6);
   ctx.fillText("R", rx1 - 12, cy - 6);
 
-  for (const c of detail.candidates) {
+  // Farthest first, so when two lights overlap in the image the nearer
+  // (bigger-looking) one paints on top -- same occlusion order a camera
+  // would see.
+  const byDistanceDesc = [...detail.candidates].sort((p, q) => q.distance_m - p.distance_m);
+  for (const c of byDistanceDesc) {
     const [sx, sy] = toScreen(c.yaw_diff, c.pitch_diff);
     const color = c.is_covered ? STATUS_COLOR.covered : c.in_fov ? STATUS_COLOR.facing_away : STATUS_COLOR.out_of_fov;
+
+    // apparent angular size of the signal housing at this distance:
+    // small-angle-free, 2*atan(half-size / distance)
+    const size = SIGNAL_HOUSING_M[c.signal_type] || SIGNAL_HOUSING_M.unknown;
+    const wDeg = 2 * Math.atan2(size.w / 2, c.distance_m) * (180 / Math.PI);
+    const hDeg = 2 * Math.atan2(size.h / 2, c.distance_m) * (180 / Math.PI);
+    const rw = wDeg * pxPerDeg, rh = hDeg * pxPerDeg;
+    ctx.fillStyle = color;
+    ctx.globalAlpha = 0.4;
+    ctx.fillRect(sx - rw / 2, sy - rh / 2, rw, rh);
+    ctx.globalAlpha = 1.0;
+    ctx.strokeStyle = color;
+    ctx.lineWidth = 1;
+    ctx.strokeRect(sx - rw / 2, sy - rh / 2, rw, rh);
+
+    // center dot so a far light (housing well below marker size) stays visible
     ctx.beginPath();
-    ctx.arc(sx, sy, 6, 0, 2 * Math.PI);
+    ctx.arc(sx, sy, 2.5, 0, 2 * Math.PI);
     ctx.fillStyle = color;
     ctx.fill();
-    ctx.strokeStyle = "white";
-    ctx.lineWidth = 1;
-    ctx.stroke();
+
     ctx.fillStyle = "white";
     ctx.font = "10px sans-serif";
-    ctx.fillText(`${c.target_tl_id} (${c.distance_m.toFixed(0)}m)`, sx + 8, sy - 8);
+    ctx.fillText(`${c.target_tl_id} (${c.distance_m.toFixed(0)}m)`, sx + Math.max(8, rw / 2 + 4), sy - Math.max(8, rh / 2 + 4));
   }
 }
 

@@ -123,7 +123,13 @@ Disabled automatically when the map has no lat/lon data.
 The camera-view panel renders through the windshield: L is the vehicle's
 left, the dashed FOV rectangle keeps its true `fov_h x fov_v` aspect
 ratio, and the blue line is the horizon (the camera is modeled level,
-pitch 0).
+pitch 0). Each candidate light is drawn as a translucent box at the
+apparent angular size of an assumed housing at its distance (vehicle
+~1.25x0.45m horizontal 3-lamp, pedestrian ~0.45x0.9m vertical 2-lamp --
+conventions, not map data), farthest first so a nearer light paints over
+a farther one the way a camera would see it; a small center dot keeps
+very distant lights visible even when their box shrinks below a few
+pixels.
 
 Available settings (CLI flag / YAML key under `camera:`):
 

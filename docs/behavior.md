@@ -617,3 +617,22 @@ Verified in a headless browser against the real map: with the layer on,
 the selected lane's waypoint dots and FOV frustum run along the actual
 road in the photo, and the candidate lights cluster at the photographed
 intersection (crosswalks visible right where the stop lines are mapped).
+
+## Camera view: apparent signal size as translucent boxes
+
+The camera view used to mark each candidate with a fixed 6px dot, which
+answers "where in the frame" but not "how big in the frame" -- and
+apparent size is the quantity a detector actually cares about (pixels on
+target). Each candidate is now drawn as a translucent status-colored box
+at the angular size of an assumed housing at that distance
+(`2*atan(size/2 / distance)`), farthest-first so a nearer light paints
+over a farther one in the same occlusion order a camera would see.
+
+The housing sizes are stated assumptions (`SIGNAL_HOUSING_M` in app.js),
+not map data: the map records bulb positions, not housing outlines. The
+values follow Japanese conventions -- vehicle: horizontal 3-lamp with
+300mm lenses, ~1.25x0.45m; pedestrian: vertical 2-lamp, ~0.45x0.9m. At
+viewer scale that means a vehicle light at 100m spans ~0.7deg of the
+30deg FOV -- the boxes make it immediately visible how thin the margin
+is at max_range. A 2.5px center dot stays drawn on top so a light at
+250m (box under ~4px) doesn't vanish entirely.
