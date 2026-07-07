@@ -32,10 +32,23 @@ function resizeCanvases() {
 }
 
 function fitViewToData() {
-  const xs = points.map((p) => p.x).concat(trafficLights.map((t) => t.x));
-  const ys = points.map((p) => p.y).concat(trafficLights.map((t) => t.y));
-  const minX = Math.min(...xs), maxX = Math.max(...xs);
-  const minY = Math.min(...ys), maxY = Math.max(...ys);
+  // Plain loops, not Math.min(...bigArray): spreading 100k+ elements as call
+  // arguments blows V8's call-stack/argument limit ("Maximum call stack size
+  // exceeded"), silently aborting main() before anything ever renders.
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const p of points) {
+    if (p.x < minX) minX = p.x;
+    if (p.x > maxX) maxX = p.x;
+    if (p.y < minY) minY = p.y;
+    if (p.y > maxY) maxY = p.y;
+  }
+  for (const t of trafficLights) {
+    if (t.x < minX) minX = t.x;
+    if (t.x > maxX) maxX = t.x;
+    if (t.y < minY) minY = t.y;
+    if (t.y > maxY) maxY = t.y;
+  }
+  if (!Number.isFinite(minX)) { minX = maxX = minY = maxY = 0; }
   const w = mapCanvas.width, h = mapCanvas.height;
   const dataW = maxX - minX || 1, dataH = maxY - minY || 1;
   const pad = 0.05;
@@ -255,23 +268,35 @@ function setupMapInteraction() {
 }
 
 async function main() {
-  const [metaRes, pointsRes, lightsRes] = await Promise.all([
-    fetch("/api/meta"), fetch("/api/points"), fetch("/api/traffic_lights"),
-  ]);
-  const meta = await metaRes.json();
-  points = await pointsRes.json();
-  trafficLights = await lightsRes.json();
+  try {
+    const [metaRes, pointsRes, lightsRes] = await Promise.all([
+      fetch("/api/meta"), fetch("/api/points"), fetch("/api/traffic_lights"),
+    ]);
+    if (!metaRes.ok || !pointsRes.ok || !lightsRes.ok) {
+      throw new Error(`API request failed (meta=${metaRes.status}, points=${pointsRes.status}, lights=${lightsRes.status})`);
+    }
+    const meta = await metaRes.json();
+    points = await pointsRes.json();
+    trafficLights = await lightsRes.json();
 
-  metaEl.textContent =
-    `${meta.lane_count} lanes | ${meta.traffic_light_count} traffic lights | ${meta.point_count} evaluated waypoints | ` +
-    `camera: height=${meta.camera.height}m fov=${meta.camera.fov_h}x${meta.camera.fov_v}deg ` +
-    `range=[${meta.camera.min_range},${meta.camera.max_range}]m facing_tolerance=${meta.camera.facing_tolerance_deg}deg`;
+    metaEl.textContent =
+      `${meta.lane_count} lanes | ${meta.traffic_light_count} traffic lights | ${meta.point_count} evaluated waypoints | ` +
+      `camera: height=${meta.camera.height}m fov=${meta.camera.fov_h}x${meta.camera.fov_v}deg ` +
+      `range=[${meta.camera.min_range},${meta.camera.max_range}]m facing_tolerance=${meta.camera.facing_tolerance_deg}deg`;
 
-  resizeCanvases();
-  fitViewToData();
-  renderMap();
-  setupMapInteraction();
-  window.addEventListener("resize", () => { resizeCanvases(); renderMap(); });
+    resizeCanvases();
+    fitViewToData();
+    renderMap();
+    setupMapInteraction();
+    window.addEventListener("resize", () => { resizeCanvases(); renderMap(); });
+  } catch (err) {
+    // Surface failures in the page itself -- a silently rejected promise
+    // here (e.g. a fetch error, or a bug in rendering) used to leave the
+    // whole UI blank with no clue why, visible only in the browser console.
+    console.error(err);
+    metaEl.textContent = `Failed to load: ${err.message}`;
+    metaEl.style.color = "#d62728";
+  }
 }
 
 main();

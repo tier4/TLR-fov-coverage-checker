@@ -194,3 +194,33 @@ is too large to ship to the browser as one JSON blob (950k+ rows on the
 bundled map), so the frontend only receives one row per unique waypoint
 (a worst-case-wins `status`, same convention as the static plot's z-order)
 for the map overview, and fetches per-light detail on click.
+
+## The viewer's map rendered nothing, silently, on a bigger point set
+
+**Symptom:** the viewer loaded (header/legend visible) but the map canvas
+stayed blank and the meta line never left "loading...". Reproduced only
+with a non-default camera spec (`min_range: 20, max_range: 250,
+signal_type: vehicle`) that happened to evaluate 126,264 waypoints; a
+default-camera run with 109,340 waypoints had shown no problem, which is
+what let this ship initially.
+
+**Root cause:** `fitViewToData()` in `static/app.js` computed the map's
+bounding box with `Math.min(...xs)` / `Math.max(...xs)`, spreading every
+point's coordinate into the call as individual arguments. V8 (and other
+JS engines) cap how many arguments a single call can take -- comfortably
+past that cap with 100k+ elements -- so the call threw `RangeError:
+Maximum call stack size exceeded`. `main()` had no `try`/`catch`, so the
+exception silently aborted everything after that point (`renderMap()`,
+`setupMapInteraction()` never ran) with nothing on the page and nothing
+but a console error to explain it.
+
+**Fix:** replaced the spread-into-`Math.min`/`max` calls with a plain
+`for` loop accumulating min/max (`static/app.js`'s `fitViewToData`), which
+has no argument-count limit regardless of point count. Also wrapped
+`main()` in `try`/`catch` so any future failure here shows up as visible
+red text in the meta line instead of a silent blank page -- catchable
+only via the browser console before this fix.
+
+Verified with a headless browser against the exact reproducing config
+(`camera_spec.yaml` with `min_range: 20, max_range: 250, signal_type:
+vehicle`): map renders, click-to-inspect works, no console errors.
