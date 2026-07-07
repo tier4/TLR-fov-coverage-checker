@@ -588,3 +588,32 @@ Two workflow additions to the viewer, no simulation-logic changes:
   (opens the panorama looking in the direction of travel -- Google's
   heading parameter is compass-north clockwise, ours is East-CCW, hence
   `heading = 90 - cam_yaw`).
+
+## Aerial photo underlay
+
+Same georeferencing fit, used for tiles instead of links. Two choices
+worth recording:
+
+- **GSI tiles, not Google.** Google's satellite imagery requires an API
+  key and (per its terms) must be consumed through their SDK, not drawn
+  onto an arbitrary canvas. GSI's (国土地理院) XYZ tile service is free
+  with attribution and covers Japan -- exactly where Lanelet2 maps with
+  this schema come from. Attribution is displayed whenever the layer is
+  on. The GSI server sends no CORS headers, so tiles are loaded *without*
+  `crossOrigin` -- that taints the canvas, which is harmless here because
+  nothing ever reads pixels back (`getImageData`/`toDataURL` are unused);
+  requesting them anonymously instead would make every tile fail.
+- **Tiles are drawn through a full 2x2 affine, not scale+translate.** The
+  local coordinate frame is slightly rotated relative to true north
+  (~0.7 degrees on the bundled map -- visible as the small x-coefficient
+  in the fitted lat row). Axis-aligned tile placement would smear that
+  rotation into a multi-meter misregistration across a tile. The
+  mercator-px -> screen affine is derived per frame from three world-space
+  reference points; mercator's residual nonlinearity across a city-scale
+  view is far below one pixel. A translucent white wash is drawn over the
+  photo so the coverage dots stay the dominant visual signal.
+
+Verified in a headless browser against the real map: with the layer on,
+the selected lane's waypoint dots and FOV frustum run along the actual
+road in the photo, and the candidate lights cluster at the photographed
+intersection (crosswalks visible right where the stop lines are mapped).

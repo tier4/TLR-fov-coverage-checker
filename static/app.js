@@ -48,6 +48,103 @@ function worldToLatLon(x, y) {
   return [lat[0] * x + lat[1] * y + lat[2], lon[0] * x + lon[1] * y + lon[2]];
 }
 
+// ---- aerial photo underlay (GSI seamless photo tiles) ----
+// GSI (Geospatial Information Authority of Japan) XYZ tiles: free to use
+// with attribution, no API key -- unlike Google's imagery, whose terms
+// require going through their SDK. Attribution is shown next to the toggle.
+const aerialToggle = document.getElementById("aerial-toggle");
+const aerialAttributionEl = document.getElementById("aerial-attribution");
+let aerialEnabled = false;
+const tileCache = new Map(); // "z/x/y" -> HTMLImageElement (may still be loading)
+const TILE_SIZE = 256;
+const tileUrl = (z, x, y) => `https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/${z}/${x}/${y}.jpg`;
+
+function latLonToMercPx(lat, lon, z) {
+  const n = TILE_SIZE * Math.pow(2, z);
+  const mx = ((lon + 180) / 360) * n;
+  const rad = (lat * Math.PI) / 180;
+  const my = ((1 - Math.log(Math.tan(rad) + 1 / Math.cos(rad)) / Math.PI) / 2) * n;
+  return [mx, my];
+}
+
+function getTile(z, x, y) {
+  const key = `${z}/${x}/${y}`;
+  let img = tileCache.get(key);
+  if (!img) {
+    if (tileCache.size > 400) tileCache.clear(); // crude but sufficient cap
+    img = new Image();
+    // No crossOrigin: the GSI server sends no CORS headers, so requesting
+    // anonymously would make every tile fail outright. Drawing a
+    // non-CORS image merely taints the canvas, which we never read back.
+    img.src = tileUrl(z, x, y);
+    img.onload = () => renderMap(); // repaint as tiles trickle in
+    tileCache.set(key, img);
+  }
+  return img;
+}
+
+function drawAerial(ctx) {
+  if (!aerialEnabled || !latlonTransform) return;
+  const w = mapCanvas.width, h = mapCanvas.height;
+
+  // pick the zoom whose ground resolution best matches the current view
+  const [ccx, ccy] = screenToWorld(w / 2, h / 2);
+  const centerLL = worldToLatLon(ccx, ccy);
+  const metersPerScreenPx = 1 / view.scale;
+  const groundResZ0 = 156543.03392 * Math.cos((centerLL[0] * Math.PI) / 180);
+  let z = Math.round(Math.log2(groundResZ0 / metersPerScreenPx));
+  z = Math.max(2, Math.min(18, z));
+
+  // Affine mercator-pixel -> screen from three world-space correspondences.
+  // The local frame can be slightly rotated relative to true north (the
+  // affine lat/lon fit captures that), so tiles must be drawn through a
+  // full 2x2 transform, not just scaled+translated. Mercator's remaining
+  // nonlinearity across a city-scale view is far below a pixel.
+  const worldRefs = [[ccx, ccy], [ccx + 100, ccy], [ccx, ccy + 100]];
+  const mercRefs = worldRefs.map(([x, y]) => { const ll = worldToLatLon(x, y); return latLonToMercPx(ll[0], ll[1], z); });
+  const screenRefs = worldRefs.map(([x, y]) => worldToScreen(x, y));
+  const [m0, m1, m2] = mercRefs;
+  const [s0, s1, s2] = screenRefs;
+  const det = (m1[0] - m0[0]) * (m2[1] - m0[1]) - (m2[0] - m0[0]) * (m1[1] - m0[1]);
+  if (Math.abs(det) < 1e-12) return;
+  const a = ((s1[0] - s0[0]) * (m2[1] - m0[1]) - (s2[0] - s0[0]) * (m1[1] - m0[1])) / det;
+  const c = ((s2[0] - s0[0]) * (m1[0] - m0[0]) - (s1[0] - s0[0]) * (m2[0] - m0[0])) / det;
+  const b = ((s1[1] - s0[1]) * (m2[1] - m0[1]) - (s2[1] - s0[1]) * (m1[1] - m0[1])) / det;
+  const d = ((s2[1] - s0[1]) * (m1[0] - m0[0]) - (s1[1] - s0[1]) * (m2[0] - m0[0])) / det;
+  const e = s0[0] - a * m0[0] - c * m0[1];
+  const f = s0[1] - b * m0[0] - d * m0[1];
+
+  // visible tile range: canvas corners -> mercator px -> tile indices
+  let minMx = Infinity, maxMx = -Infinity, minMy = Infinity, maxMy = -Infinity;
+  for (const [sx, sy] of [[0, 0], [w, 0], [0, h], [w, h]]) {
+    const [wx, wy] = screenToWorld(sx, sy);
+    const ll = worldToLatLon(wx, wy);
+    const [mx, my] = latLonToMercPx(ll[0], ll[1], z);
+    minMx = Math.min(minMx, mx); maxMx = Math.max(maxMx, mx);
+    minMy = Math.min(minMy, my); maxMy = Math.max(maxMy, my);
+  }
+  const maxTile = Math.pow(2, z) - 1;
+  const tx0 = Math.max(0, Math.floor(minMx / TILE_SIZE)), tx1 = Math.min(maxTile, Math.floor(maxMx / TILE_SIZE));
+  const ty0 = Math.max(0, Math.floor(minMy / TILE_SIZE)), ty1 = Math.min(maxTile, Math.floor(maxMy / TILE_SIZE));
+  if ((tx1 - tx0 + 1) * (ty1 - ty0 + 1) > 150) return; // absurd range = bad transform, bail
+
+  ctx.save();
+  ctx.setTransform(a, b, c, d, e, f);
+  for (let ty = ty0; ty <= ty1; ty++) {
+    for (let tx = tx0; tx <= tx1; tx++) {
+      const img = getTile(z, tx, ty);
+      if (img.complete && img.naturalWidth > 0) {
+        ctx.drawImage(img, tx * TILE_SIZE, ty * TILE_SIZE, TILE_SIZE, TILE_SIZE);
+      }
+    }
+  }
+  ctx.restore();
+
+  // soften the photo so the coverage dots stay the dominant signal
+  ctx.fillStyle = "rgba(255, 255, 255, 0.25)";
+  ctx.fillRect(0, 0, w, h);
+}
+
 // world <-> screen transform state for the map pane
 const view = { scale: 1, offsetX: 0, offsetY: 0 };
 
@@ -180,6 +277,8 @@ function renderMap() {
   const ctx = mapCtx;
   ctx.setTransform(1, 0, 0, 1, 0, 0);
   ctx.clearRect(0, 0, mapCanvas.width, mapCanvas.height);
+
+  drawAerial(ctx);
 
   const byStatus = { covered: [], facing_away: [], out_of_fov: [] };
   for (const p of points) byStatus[p.status].push(p);
@@ -593,6 +692,16 @@ async function main() {
       pointSizeValueEl.textContent = `${pointSizeScale.toFixed(2)}x`;
       renderMap();
     });
+    if (latlonTransform) {
+      aerialToggle.addEventListener("change", () => {
+        aerialEnabled = aerialToggle.checked;
+        aerialAttributionEl.hidden = !aerialEnabled;
+        renderMap();
+      });
+    } else {
+      // no lat/lon in this map (or an old snapshot): nothing to georeference
+      aerialToggle.disabled = true;
+    }
     window.addEventListener("resize", () => { resizeCanvases(); renderMap(); });
 
     if (restoredPoint) {

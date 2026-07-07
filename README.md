@@ -111,6 +111,15 @@ per-map affine fit between the nodes' `local_x`/`local_y` tags and their
 `lat`/`lon` attributes (`parse_latlon_transform`) -- accurate to well
 under a meter at city scale.
 
+**Aerial photo underlay:** the "Aerial photo" checkbox above the map
+overlays GSI (国土地理院) seamless aerial photo tiles under the coverage
+dots, using the same georeferencing fit (Google's imagery requires an API
+key and their SDK per its terms; GSI tiles are free with attribution,
+which is shown next to the toggle). Tiles are fetched at the zoom level
+matching the current view and drawn through the full affine transform,
+so a locally-rotated coordinate frame still lines up with the photo.
+Disabled automatically when the map has no lat/lon data.
+
 The camera-view panel renders through the windshield: L is the vehicle's
 left, the dashed FOV rectangle keeps its true `fov_h x fov_v` aspect
 ratio, and the blue line is the horizon (the camera is modeled level,
