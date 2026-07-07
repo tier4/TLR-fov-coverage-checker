@@ -85,6 +85,12 @@ def main() -> None:
         default=None,
         help="only plot uncovered waypoints (hide the Covered/green layer)",
     )
+    parser.add_argument(
+        "--point-size",
+        type=float,
+        default=None,
+        help="matplotlib marker area for each waypoint dot in the saved plot (default 6.0)",
+    )
     args = parser.parse_args()
 
     config = load_config(args.config.read_text(encoding="utf-8")) if args.config else AppConfig()
@@ -102,6 +108,7 @@ def main() -> None:
     signal_type = args.signal_type or config.signal_type
     signal_types = None if signal_type == "both" else {signal_type}
     blind_only = config.blind_only if args.blind_only is None else args.blind_only
+    point_size = config.point_size if args.point_size is None else args.point_size
 
     map_path = args.map or (Path(config.map_path) if config.map_path else None)
     if map_path is None:
@@ -139,7 +146,15 @@ def main() -> None:
         print(f"Lanes with at least one blind waypoint: {len(blind_lanes)} / {len(lanes)}")
 
     plotted_lights = traffic_lights if signal_types is None else [tl for tl in traffic_lights if tl.signal_type in signal_types]
-    plot_results(results, plotted_lights, lanes=lanes, blind_only=blind_only, save_path=str(output_path), show=False)
+    plot_results(
+        results,
+        plotted_lights,
+        lanes=lanes,
+        blind_only=blind_only,
+        point_size=point_size,
+        save_path=str(output_path),
+        show=False,
+    )
     print(f"Plot saved to {output_path}")
 
 

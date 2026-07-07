@@ -60,6 +60,23 @@ main {
   margin-bottom: 6px;
 }
 
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.8rem;
+  color: #333;
+  margin-bottom: 6px;
+}
+
+.controls input[type="range"] {
+  width: 140px;
+}
+
+.controls span {
+  min-width: 3.5em;
+}
+
 #map-canvas {
   flex: 1;
   width: 100%;

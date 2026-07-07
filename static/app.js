@@ -15,6 +15,8 @@ const frameCtx = frameCanvas.getContext("2d");
 const metaEl = document.getElementById("meta");
 const pointInfoEl = document.getElementById("point-info");
 const candidateTbody = document.querySelector("#candidate-table tbody");
+const pointSizeInput = document.getElementById("point-size");
+const pointSizeValueEl = document.getElementById("point-size-value");
 
 let points = [];
 let trafficLights = [];
@@ -23,6 +25,7 @@ let currentDetail = null;
 let cameraSpec = null;
 // target_tl_id -> status color, for whichever point is currently selected
 let highlightedLights = new Map();
+let pointSizeScale = 1.0;
 
 // world <-> screen transform state for the map pane
 const view = { scale: 1, offsetX: 0, offsetY: 0 };
@@ -140,7 +143,7 @@ function renderMap() {
   const byStatus = { covered: [], facing_away: [], out_of_fov: [] };
   for (const p of points) byStatus[p.status].push(p);
 
-  const dotSize = Math.max(1, Math.min(2.2, view.scale * 0.15));
+  const dotSize = Math.max(1, Math.min(2.2, view.scale * 0.15)) * pointSizeScale;
   for (const status of STATUS_DRAW_ORDER) {
     ctx.fillStyle = STATUS_COLOR[status];
     for (const p of byStatus[status]) {
@@ -416,6 +419,11 @@ async function main() {
     renderMap();
     setupMapInteraction();
     setupFrameInteraction();
+    pointSizeInput.addEventListener("input", () => {
+      pointSizeScale = parseFloat(pointSizeInput.value);
+      pointSizeValueEl.textContent = `${pointSizeScale.toFixed(2)}x`;
+      renderMap();
+    });
     window.addEventListener("resize", () => { resizeCanvases(); renderMap(); });
   } catch (err) {
     // Surface failures in the page itself -- a silently rejected promise

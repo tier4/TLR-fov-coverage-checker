@@ -10,6 +10,7 @@ output: fov_coverage_result_vehicle_30deg.png
 
 signal_type: vehicle  # vehicle | pedestrian | both
 blind_only: false     # true: plot only uncovered waypoints (hide the Covered/green layer)
+point_size: 6.0       # matplotlib marker area for each waypoint dot in the saved plot
 
 camera:
   height: 3.0               # camera mount height [m]

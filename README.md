@@ -53,7 +53,8 @@ to `max_range` spanning `fov_h`, with a dashed line down the middle showing
 `cam_yaw` (the lane's direction of travel at that point) -- and enlarges
 its candidate traffic lights' stars, colored by that candidate's status,
 so it's clear at a glance which star(s) on the map the camera-view panel
-is showing.
+is showing. The "Point size" slider above the map scales the waypoint dots
+if they're too small to make out at the zoom level you're at.
 
 CLI flags always take precedence over a `--config` YAML, which takes
 precedence over built-in defaults (`CameraSpec` in `models.py`).
@@ -70,6 +71,7 @@ Available settings (CLI flag / YAML key under `camera:`):
 | `--facing-tolerance` | `facing_tolerance_deg` | max angle between the signal's face and the camera for it to still be legible [deg] | 45.0 |
 | `--signal-type` | `signal_type` (top-level) | `vehicle` / `pedestrian` / `both` | both |
 | `--blind-only` / `--no-blind-only` | `blind_only` (top-level) | plot only uncovered waypoints, hiding the Covered/green layer | false |
+| `--point-size` | `point_size` (top-level) | matplotlib marker area (`s=`) for each waypoint dot -- bump it up if points are too small to see | 6.0 |
 | `--map` | `map` (top-level) | path to the Lanelet2 `.osm` file | *(required)* |
 | `--output` | `output` (top-level) | output plot path | `fov_coverage_result.png` |
 

@@ -11,6 +11,7 @@ def test_load_config_empty_yaml_uses_all_defaults():
     assert config.map_path is None
     assert config.output_path is None
     assert config.blind_only is False
+    assert config.point_size == 6.0
 
 
 def test_load_config_full_yaml():
@@ -19,6 +20,7 @@ def test_load_config_full_yaml():
     output: result.png
     signal_type: vehicle
     blind_only: true
+    point_size: 12.0
     camera:
       height: 2.5
       fov_h: 40.0
@@ -32,6 +34,7 @@ def test_load_config_full_yaml():
     assert config.output_path == "result.png"
     assert config.signal_type == "vehicle"
     assert config.blind_only is True
+    assert config.point_size == 12.0
     assert config.camera == CameraSpec(
         height=2.5, fov_h=40.0, fov_v=20.0, min_range=30.0, max_range=150.0, facing_tolerance_deg=60.0
     )

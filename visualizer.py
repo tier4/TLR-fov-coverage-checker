@@ -20,6 +20,7 @@ def plot_results(
     traffic_lights: list[TrafficLight],
     lanes: list[LanePath] | None = None,
     blind_only: bool = False,
+    point_size: float = 6.0,
     save_path: str | None = "fov_coverage_result.png",
     show: bool = False,
 ) -> None:
@@ -58,6 +59,10 @@ def plot_results(
     `blind_only=True` skips the "Covered" (green) layer entirely, showing
     only where the camera spec falls short -- useful once a full plot gets
     too dense to spot the gaps in.
+
+    `point_size` is the matplotlib scatter marker area (`s=`) for each
+    waypoint dot; bump it up if points are too small to see at the zoom
+    level you're viewing the saved image at.
     """
     fig, ax = plt.subplots(figsize=(12, 10))
 
@@ -96,7 +101,7 @@ def plot_results(
                 [p[0] for p in pts],
                 [p[1] for p in pts],
                 c=color,
-                s=6,
+                s=point_size,
                 label=f"{label} ({len(pts)})",
                 zorder=zorder,
             )

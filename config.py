@@ -23,6 +23,7 @@ class AppConfig:
     output_path: str | None = None
     signal_type: str = "both"
     blind_only: bool = False
+    point_size: float = 6.0
     camera: CameraSpec = _DEFAULT_CAMERA
 
 
@@ -51,5 +52,6 @@ def load_config(yaml_string: str) -> AppConfig:
         output_path=raw.get("output"),
         signal_type=signal_type,
         blind_only=bool(raw.get("blind_only", False)),
+        point_size=float(raw.get("point_size", 6.0)),
         camera=camera,
     )
