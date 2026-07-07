@@ -134,7 +134,9 @@ def test_points_endpoint_returns_expected_shape(client):
 def test_traffic_lights_endpoint(client):
     res = client.get("/api/traffic_lights")
     data = res.get_json()
-    assert data == [{"id": "900", "x": pytest.approx(150.25), "y": pytest.approx(202.0)}]
+    assert data == [
+        {"id": "900", "x": pytest.approx(150.25), "y": pytest.approx(202.0), "facing_yaw": pytest.approx(180.0)}
+    ]
 
 
 def test_point_candidates_endpoint_offsets_agree_with_normalization(client):
@@ -175,8 +177,8 @@ def test_export_endpoint_returns_gzip_json_snapshot(client):
     assert res.status_code == 200
     assert res.headers["Content-Disposition"] == "attachment; filename=fov_results.json.gz"
     data = json.loads(gzip.decompress(res.data))
-    assert data["format_version"] == 1
-    assert "points" in data and "results_by_point" in data and "tl_positions" in data
+    assert data["format_version"] == webapp._SNAPSHOT_FORMAT_VERSION
+    assert "points" in data and "results_by_point" in data and "tl_positions" in data and "tl_facing_yaw" in data
 
 
 def test_serialize_then_deserialize_round_trip_preserves_candidates(client):
@@ -184,12 +186,14 @@ def test_serialize_then_deserialize_round_trip_preserves_candidates(client):
     # a point's detail response must be identical before and after the map
     # and simulation are discarded in favor of the snapshot alone.
     before = client.get("/api/points/0/candidates").get_json()
+    lights_before = client.get("/api/traffic_lights").get_json()
 
     snapshot = webapp._serialize_state()
     webapp._deserialize_state(snapshot)
 
     after = client.get("/api/points/0/candidates").get_json()
     assert after == before
+    assert client.get("/api/traffic_lights").get_json() == lights_before
 
 
 def test_deserialize_rejects_unknown_format_version(client):

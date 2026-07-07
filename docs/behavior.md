@@ -478,3 +478,45 @@ reduction in false positives, but a real one, and cheap to apply.
 - Whole-map default-camera-spec run: vehicle coverage 54.0% -> **75.4%**;
   pedestrian coverage unchanged (34.2%, exact) as expected, since none of
   this touches pedestrian-signal handling.
+
+## A third point, and a pivot from threshold-tuning to visualizing facing_yaw
+
+A third reported point (`?lane=2293233&x=...`) turned out to be the same
+family of issue again, but at a different edge: lane `2293233` has no
+direct/inherited reference, and its two candidate stop lines sit 70.5m
+and 85.3m from the lane's own end -- both past `STOP_LINE_PROXIMITY_M`
+(30m), so the proximity fix (rightly) doesn't fire, and it falls all the
+way through to the geometric heuristic. The wrongly-included signal
+(`2296340`) sits at 130.52 degrees off the lane's heading -- comfortably
+past the 120 degree threshold, not a near-miss like the earlier 96.77
+degree case, so tightening the threshold further would risk cutting
+genuine matches elsewhere for one more fix here. Diminishing, whack-a-mole
+returns from threshold-only tuning going forward.
+
+Given that, the next step was a pivot the user asked for directly:
+instead of chasing one misclassified light at a time via a Python script
+each time, make `facing_yaw` visible on the map itself so it's possible to
+eyeball an intersection and see immediately which lights make geometric
+sense for a given approach.
+
+**Implementation:** `/api/traffic_lights` now includes each light's
+`facing_yaw` (`webapp.py`'s `_state["tl_facing_yaw"]`, threaded through
+`_serialize_state`/`_deserialize_state` too -- bumped
+`_SNAPSHOT_FORMAT_VERSION` to 2 since old snapshots lack the field and
+should fail loudly on `--load` rather than KeyError confusingly).
+`static/app.js`'s `drawFacingArrow` draws a short arrow from each star in
+its facing_yaw direction (computed directly in screen space -- a world
+direction only needs scaling by `view.scale`, not a full
+`worldToScreen` round-trip, since there's no rotation between the two).
+Lights with no `ref_line` (facing_yaw is `null`, mostly pedestrian
+signals) simply get no arrow, which is itself informative: it shows at a
+glance which lights the tool has no orientation data for at all.
+
+**Verified** on the `2293233` point specifically (headless browser,
+directly setting `view.scale`/`view.offsetX`/`offsetY` and calling
+`renderMap()` to center tightly on the two candidate lights rather than
+fumbling scroll-zoom): the correctly-covered light's arrow points back
+down the approach frustum as expected; the wrongly-included light's arrow
+points at a visibly different angle, not aligned with the frustum axis --
+confirming by eye what the geometry check computes, and giving the user a
+way to spot the next one of these without asking for a script each time.

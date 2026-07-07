@@ -56,6 +56,14 @@ so it's clear at a glance which star(s) on the map the camera-view panel
 is showing. The "Point size" slider above the map scales the waypoint dots
 if they're too small to make out at the zoom level you're at.
 
+Every star also carries a short arrow showing which way that signal
+faces (`facing_yaw`, from `/api/traffic_lights`) -- zoom into an
+intersection and you can see directly whether a light's own orientation
+actually points back down a given lane's approach, instead of having to
+infer it from a `check_light_relevant_to_lane` pass/fail. A star with no
+arrow has no `ref_line` in the map (facing_yaw is unknown -- normally a
+pedestrian signal).
+
 CLI flags always take precedence over a `--config` YAML, which takes
 precedence over built-in defaults (`CameraSpec` in `models.py`).
 

@@ -170,6 +170,16 @@ main {
   transform: rotate(45deg);
 }
 
+.legend .arrow {
+  display: inline-block;
+  width: 0;
+  height: 0;
+  border-top: 4px solid transparent;
+  border-bottom: 4px solid transparent;
+  border-left: 8px solid #1a1a1a;
+  margin-right: 4px;
+}
+
 #point-info {
   font-size: 0.85rem;
   margin: 8px 0;

@@ -96,6 +96,39 @@ function drawStar(ctx, cx, cy, r, fillColor, strokeColor, strokeWidth) {
   ctx.stroke();
 }
 
+// A short arrow from a traffic light's star showing the direction it
+// faces (facing_yaw: bearing from the bulb centroid toward its stop
+// line, i.e. the direction the signal shines/points). `length` is in
+// screen pixels, not world meters -- world dx/dy for a unit vector only
+// need scaling by view.scale (no rotation), and screen y is flipped
+// relative to world y, so this is simpler done directly in screen space
+// than round-tripping through worldToScreen.
+function drawFacingArrow(ctx, sx, sy, facingYawDeg, length, color) {
+  const yaw = (facingYawDeg * Math.PI) / 180;
+  const tx = sx + length * Math.cos(yaw);
+  const ty = sy - length * Math.sin(yaw);
+
+  ctx.save();
+  ctx.beginPath();
+  ctx.moveTo(sx, sy);
+  ctx.lineTo(tx, ty);
+  ctx.strokeStyle = color;
+  ctx.lineWidth = Math.max(1, length * 0.18);
+  ctx.stroke();
+
+  const screenAngle = Math.atan2(ty - sy, tx - sx);
+  const headLen = Math.max(2.5, length * 0.45);
+  const headAngle = Math.PI / 7;
+  ctx.beginPath();
+  ctx.moveTo(tx, ty);
+  ctx.lineTo(tx - headLen * Math.cos(screenAngle - headAngle), ty - headLen * Math.sin(screenAngle - headAngle));
+  ctx.lineTo(tx - headLen * Math.cos(screenAngle + headAngle), ty - headLen * Math.sin(screenAngle + headAngle));
+  ctx.closePath();
+  ctx.fillStyle = color;
+  ctx.fill();
+  ctx.restore();
+}
+
 function drawFrustum(ctx, point, camYawDeg, fovHDeg, minRange, maxRange) {
   const yaw = (camYawDeg * Math.PI) / 180;
   const half = (fovHDeg / 2) * (Math.PI / 180);
@@ -174,11 +207,17 @@ function renderMap() {
     if (highlightedLights.has(tl.id)) { highlighted.push(tl); continue; }
     const [sx, sy] = worldToScreen(tl.x, tl.y);
     drawStar(ctx, sx, sy, starR, "gold", "black", 0.6);
+    if (tl.facing_yaw !== null && tl.facing_yaw !== undefined) {
+      drawFacingArrow(ctx, sx, sy, tl.facing_yaw, starR * 2.2, "#1a1a1a");
+    }
   }
   for (const tl of highlighted) {
     const [sx, sy] = worldToScreen(tl.x, tl.y);
     const color = highlightedLights.get(tl.id);
     drawStar(ctx, sx, sy, highlightR, color, "black", 2.2);
+    if (tl.facing_yaw !== null && tl.facing_yaw !== undefined) {
+      drawFacingArrow(ctx, sx, sy, tl.facing_yaw, highlightR * 2.2, "#1a1a1a");
+    }
   }
 
   if (selectedPointId !== null) {
