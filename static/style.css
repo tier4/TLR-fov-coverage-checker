@@ -19,6 +19,7 @@ header {
   padding: 10px 16px;
   border-bottom: 1px solid var(--border);
   background: white;
+  position: relative;
 }
 
 header h1 {
@@ -29,6 +30,52 @@ header h1 {
 #meta {
   font-size: 0.85rem;
   color: #555;
+}
+
+#export-link {
+  position: absolute;
+  top: 10px;
+  right: 16px;
+  font-size: 0.8rem;
+  color: #1f77b4;
+  text-decoration: none;
+}
+
+#export-link:hover {
+  text-decoration: underline;
+}
+
+#point-info-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: 8px 0;
+}
+
+#point-info-row #point-info {
+  margin: 0;
+  flex: 1;
+}
+
+#copy-link-btn {
+  font-size: 0.78rem;
+  padding: 4px 8px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: white;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+#copy-link-btn:disabled {
+  cursor: default;
+  color: #aaa;
+}
+
+#copy-link-btn.copied {
+  background: var(--covered);
+  color: white;
+  border-color: var(--covered);
 }
 
 main {

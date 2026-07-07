@@ -379,3 +379,37 @@ vehicle signals only and didn't disturb anything else. Verified in the
 viewer: a waypoint that previously had 21 mostly-irrelevant candidates and
 read "facing_away" overall now has exactly 1 candidate (its own signal)
 and reads "covered".
+
+## Sharing a specific finding without the map file
+
+Two related asks came up once the fix above meant most remaining red/
+orange points were genuine: how to hand a specific one off for discussion
+(to a teammate, or back to a future session) without re-explaining "click
+here, zoom there," and how to avoid recomputing a ~20-30s run every time.
+
+**Point identity for a shareable link:** the obvious choice was the
+point's `id` in `/api/points`, but that's just this run's insertion order
+-- an array index, not a stable identity. A different signal_type filter,
+a different `camera.max_range` (which changes how far
+`_build_lane_relevant_tl_ids` looks), or any future change to candidate
+filtering can shift which index a given physical waypoint lands on. Used
+`(lane_id, x, y)` instead -- the actual identity `results_by_point` is
+already keyed by internally -- so a link stays correct across reruns of
+the same map/camera as long as the simulation is deterministic, which it
+is (fixed `SAMPLE_INTERVAL_M`, no randomness).
+
+**Save/load format:** `_serialize_state()`/`_deserialize_state()`
+round-trip the entire in-memory `_state` (points, per-point candidate
+results, traffic light positions, per-waypoint heading lookup, camera
+spec) through plain JSON, reconstructing real `Point3D`/`ValidationResult`
+instances on load so every other function in the module keeps working
+unchanged -- it doesn't know or care whether `_state` came from
+`_load_data` (a fresh map+simulation) or `_deserialize_state` (a loaded
+snapshot). Gzip-compressed by default (`_write_snapshot`/`_read_snapshot`):
+the uncompressed JSON ran 118MB on the bundled map (one entry per
+waypoint/light candidate, which is extremely repetitive and compresses
+to about 13MB, an ~9x reduction) -- large enough that shipping it
+uncompressed would have undercut the whole point of making a run easy to
+hand off. `_read_snapshot` still accepts a plain uncompressed JSON file
+too (falls back if gzip decompression fails), in case someone hand-edits
+one.

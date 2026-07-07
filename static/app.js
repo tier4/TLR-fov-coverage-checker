@@ -17,6 +17,7 @@ const pointInfoEl = document.getElementById("point-info");
 const candidateTbody = document.querySelector("#candidate-table tbody");
 const pointSizeInput = document.getElementById("point-size");
 const pointSizeValueEl = document.getElementById("point-size-value");
+const copyLinkBtn = document.getElementById("copy-link-btn");
 
 let points = [];
 let trafficLights = [];
@@ -201,6 +202,38 @@ function findNearestPoint(worldX, worldY) {
   return best;
 }
 
+function updateUrlForPoint(point) {
+  // Encoded by (lane_id, x, y) rather than the point's array index: that
+  // index is just an insertion-order artifact of this particular run, so a
+  // link built from it could point at the wrong waypoint after a rerun
+  // with different filtering. The physical (lane, location) identity is
+  // stable across any run of the same map/camera spec.
+  const url = new URL(window.location.href);
+  url.searchParams.set("lane", point.lane_id);
+  url.searchParams.set("x", point.x);
+  url.searchParams.set("y", point.y);
+  history.replaceState(null, "", url);
+  copyLinkBtn.disabled = false;
+}
+
+function findPointFromUrl() {
+  const params = new URLSearchParams(window.location.search);
+  const lane = params.get("lane");
+  const x = parseFloat(params.get("x"));
+  const y = parseFloat(params.get("y"));
+  if (lane === null || Number.isNaN(x) || Number.isNaN(y)) return null;
+
+  let best = null, bestDist = Infinity;
+  for (const p of points) {
+    if (p.lane_id !== lane) continue;
+    const d = (p.x - x) ** 2 + (p.y - y) ** 2;
+    if (d < bestDist) { bestDist = d; best = p; }
+  }
+  // require a close match (1cm) -- a lane/coordinate typo shouldn't silently
+  // jump to some unrelated point on the same lane.
+  return bestDist < 0.01 ? best : null;
+}
+
 async function selectPoint(pointId) {
   selectedPointId = pointId;
   currentDetail = null;
@@ -208,6 +241,7 @@ async function selectPoint(pointId) {
   frameView.zoom = 1;
   frameView.panX = 0;
   frameView.panY = 0;
+  updateUrlForPoint(points[pointId]);
   renderMap(); // selection ring right away; frustum/highlights follow once detail arrives
 
   const res = await fetch(`/api/points/${pointId}/candidates`);
@@ -396,6 +430,24 @@ function setupFrameInteraction() {
   });
 }
 
+function setupCopyLinkButton() {
+  copyLinkBtn.addEventListener("click", async () => {
+    const original = "Copy link to this point";
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      copyLinkBtn.textContent = "Copied!";
+      copyLinkBtn.classList.add("copied");
+    } catch (err) {
+      console.error("clipboard write failed", err);
+      copyLinkBtn.textContent = "Copy failed";
+    }
+    setTimeout(() => {
+      copyLinkBtn.textContent = original;
+      copyLinkBtn.classList.remove("copied");
+    }, 1500);
+  });
+}
+
 async function main() {
   try {
     const [metaRes, pointsRes, lightsRes] = await Promise.all([
@@ -416,15 +468,27 @@ async function main() {
 
     resizeCanvases();
     fitViewToData();
+
+    const restoredPoint = findPointFromUrl();
+    if (restoredPoint) {
+      view.offsetX = mapCanvas.width / 2 - Math.max(view.scale, 5) * restoredPoint.x;
+      view.offsetY = mapCanvas.height / 2 + Math.max(view.scale, 5) * restoredPoint.y;
+      view.scale = Math.max(view.scale, 5);
+    }
     renderMap();
     setupMapInteraction();
     setupFrameInteraction();
+    setupCopyLinkButton();
     pointSizeInput.addEventListener("input", () => {
       pointSizeScale = parseFloat(pointSizeInput.value);
       pointSizeValueEl.textContent = `${pointSizeScale.toFixed(2)}x`;
       renderMap();
     });
     window.addEventListener("resize", () => { resizeCanvases(); renderMap(); });
+
+    if (restoredPoint) {
+      await selectPoint(restoredPoint.id);
+    }
   } catch (err) {
     // Surface failures in the page itself -- a silently rejected promise
     // here (e.g. a fetch error, or a bug in rendering) used to leave the

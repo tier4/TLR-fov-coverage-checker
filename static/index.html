@@ -9,6 +9,7 @@
   <header>
     <h1>Traffic Light FOV Coverage Viewer</h1>
     <div id="meta">loading...</div>
+    <a id="export-link" href="/api/export" download>&#8681; Download results (.json.gz)</a>
   </header>
 
   <main>
@@ -41,7 +42,10 @@
         need one to count).
       </div>
       <canvas id="frame-canvas"></canvas>
-      <div id="point-info">Select a point on the map.</div>
+      <div id="point-info-row">
+        <div id="point-info">Select a point on the map.</div>
+        <button id="copy-link-btn" type="button" disabled>Copy link to this point</button>
+      </div>
       <table id="candidate-table">
         <thead>
           <tr>

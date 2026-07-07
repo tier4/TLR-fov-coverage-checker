@@ -3,6 +3,9 @@ tiny mock map (written to a temp file, since _load_data takes a path) with
 a wide-open CameraSpec so the single lane/light pair is always a candidate.
 """
 
+import gzip
+import json
+
 import pytest
 
 import webapp
@@ -165,3 +168,52 @@ def test_point_candidates_endpoint_includes_group_status(client):
 def test_point_candidates_404_for_unknown_id(client):
     res = client.get("/api/points/999999/candidates")
     assert res.status_code == 404
+
+
+def test_export_endpoint_returns_gzip_json_snapshot(client):
+    res = client.get("/api/export")
+    assert res.status_code == 200
+    assert res.headers["Content-Disposition"] == "attachment; filename=fov_results.json.gz"
+    data = json.loads(gzip.decompress(res.data))
+    assert data["format_version"] == 1
+    assert "points" in data and "results_by_point" in data and "tl_positions" in data
+
+
+def test_serialize_then_deserialize_round_trip_preserves_candidates(client):
+    # exercises the exact --save/--load path without touching the filesystem:
+    # a point's detail response must be identical before and after the map
+    # and simulation are discarded in favor of the snapshot alone.
+    before = client.get("/api/points/0/candidates").get_json()
+
+    snapshot = webapp._serialize_state()
+    webapp._deserialize_state(snapshot)
+
+    after = client.get("/api/points/0/candidates").get_json()
+    assert after == before
+
+
+def test_deserialize_rejects_unknown_format_version(client):
+    snapshot = webapp._serialize_state()
+    snapshot["format_version"] = 999
+    with pytest.raises(ValueError, match="unsupported snapshot format_version"):
+        webapp._deserialize_state(snapshot)
+
+
+def test_write_snapshot_then_read_snapshot_round_trip(tmp_path, client):
+    snapshot_path = tmp_path / "snapshot.json.gz"
+    original = webapp._serialize_state()
+
+    webapp._write_snapshot(snapshot_path, original)
+    loaded = webapp._read_snapshot(snapshot_path)
+
+    assert loaded == original
+    # compressed, not a plain-text JSON file
+    assert snapshot_path.read_bytes()[:2] == b"\x1f\x8b"
+
+
+def test_read_snapshot_also_accepts_uncompressed_json(tmp_path, client):
+    snapshot_path = tmp_path / "snapshot.json"
+    original = webapp._serialize_state()
+    snapshot_path.write_text(json.dumps(original), encoding="utf-8")
+
+    assert webapp._read_snapshot(snapshot_path) == original

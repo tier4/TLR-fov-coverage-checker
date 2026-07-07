@@ -59,6 +59,33 @@ if they're too small to make out at the zoom level you're at.
 CLI flags always take precedence over a `--config` YAML, which takes
 precedence over built-in defaults (`CameraSpec` in `models.py`).
 
+**Sharing a specific point:** selecting a point updates the browser's own
+URL with `?lane=...&x=...&y=...` -- just copy the address bar, or click
+"Copy link to this point" next to the candidate table. Pasting that URL
+(to yourself later, or to someone else running the same snapshot/map)
+re-selects and centers on the exact same waypoint automatically. It's
+keyed by lane id + coordinates rather than the point's internal array
+index, so it still resolves correctly even if a rerun's filtering changes
+which index that waypoint happens to land on.
+
+**Saving/loading a run:** computing a run takes ~20-30s and needs the
+(large, not redistributable) `.osm` file -- `--save PATH` freezes the
+computed result set to a gzip-compressed JSON snapshot, and `--load PATH`
+reloads one later (or on another machine) in about a second, skipping map
+parsing and the simulation entirely:
+
+```bash
+# compute once, freeze the result, keep serving
+python3 webapp.py --config camera_spec.yaml --save run1.json.gz
+
+# later (or from the .json.gz file alone, no .osm needed)
+python3 webapp.py --load run1.json.gz
+```
+
+A running instance can also be exported on demand via the "Download
+results" link in the header (`GET /api/export`), without needing a
+`--save` flag or a server restart.
+
 Available settings (CLI flag / YAML key under `camera:`):
 
 | CLI flag | YAML key | Meaning | Default |
