@@ -60,6 +60,7 @@ const tabPatterns = document.getElementById("tab-patterns");
 const patternFilterInput = document.getElementById("pattern-filter");
 const patternSummaryEl = document.getElementById("pattern-summary");
 const patternTbody = document.querySelector("#pattern-table tbody");
+const colorModeSelect = document.getElementById("color-mode");
 
 let points = [];
 let trafficLights = [];
@@ -72,6 +73,8 @@ let latlonTransform = null;
 // target_tl_id -> status color, for whichever point is currently selected
 let highlightedLights = new Map();
 let pointSizeScale = 1.0;
+// map dot coloring: "status" (coverage verdict) | "redundancy" (min visible heads)
+let colorMode = "status";
 // right-pane tab state + pattern catalog (fetched lazily on first open)
 let activeTab = "camera";
 let patternsData = null;
@@ -189,6 +192,16 @@ function coveredShade(ratio) {
   const t = Math.max(0, Math.min(1, ratio));
   const lerp = (a, b) => Math.round(a + (b - a) * t);
   return `rgb(${lerp(186, 44)}, ${lerp(228, 160)}, ${lerp(179, 44)})`;
+}
+
+// Redundancy palette: the *absolute* min visible head count across a
+// waypoint's groups. Distinct from the ratio shading above on purpose --
+// 1 of 1 heads is 100% covered but has zero redundancy (one occluded or
+// dirty head and the signal state is gone). Discrete colors because the
+// quantity is discrete: 0=blind, 1=no margin, 2/3/4+ = real redundancy.
+const REDUNDANCY_COLOR = ["#d62728", "#ff7f0e", "#a6d96a", "#1a9641", "#00584a"];
+function redundancyColor(minVisible) {
+  return REDUNDANCY_COLOR[Math.max(0, Math.min(REDUNDANCY_COLOR.length - 1, minVisible))];
 }
 
 // world <-> screen transform state for the map pane
@@ -329,10 +342,30 @@ function renderMap() {
 
   drawAerial(ctx);
 
+  const dotSize = Math.max(1, Math.min(2.2, view.scale * 0.15)) * pointSizeScale;
+
+  if (colorMode === "redundancy") {
+    // discrete buckets by min visible heads, worst drawn last (on top)
+    const buckets = [[], [], [], [], []];
+    for (const p of points) {
+      const n = Math.max(0, Math.min(4, p.min_heads_visible ?? 0));
+      buckets[n].push(p);
+    }
+    for (let n = 4; n >= 0; n--) {
+      if (!buckets[n].length) continue;
+      ctx.fillStyle = redundancyColor(n);
+      for (const p of buckets[n]) {
+        const [sx, sy] = worldToScreen(p.x, p.y);
+        ctx.fillRect(sx - dotSize / 2, sy - dotSize / 2, dotSize, dotSize);
+      }
+    }
+    drawMapOverlays(ctx, dotSize);
+    return;
+  }
+
   const byStatus = { covered: [], facing_away: [], out_of_fov: [] };
   for (const p of points) byStatus[p.status].push(p);
 
-  const dotSize = Math.max(1, Math.min(2.2, view.scale * 0.15)) * pointSizeScale;
   for (const status of STATUS_DRAW_ORDER) {
     if (status === "covered") {
       // graded green: a covered point's shade encodes its weakest group's
@@ -361,6 +394,12 @@ function renderMap() {
     }
   }
 
+  drawMapOverlays(ctx, dotSize);
+}
+
+// everything drawn above the waypoint dots, shared by both color modes:
+// frustum, light markers, pattern rings, selection ring
+function drawMapOverlays(ctx, dotSize) {
   if (selectedPointId !== null && currentDetail && cameraSpec) {
     drawFrustum(
       ctx,
@@ -497,7 +536,9 @@ async function selectPoint(pointId) {
 function renderPointInfo(detail) {
   const p = detail.point;
   const sel = selectedPointId !== null ? points[selectedPointId] : null;
-  const headsNote = sel && sel.heads_total > 0 ? `  |  weakest group: ${sel.heads_visible}/${sel.heads_total} heads visible` : "";
+  const headsNote = sel && sel.heads_total > 0
+    ? `  |  weakest group: ${sel.heads_visible}/${sel.heads_total} heads visible  |  redundancy: ${sel.min_heads_visible ?? "?"}`
+    : "";
   pointInfoEl.textContent =
     `lane ${p.lane_id} @ (${p.x.toFixed(1)}, ${p.y.toFixed(1)})  |  ` +
     `cam_yaw=${detail.cam_yaw.toFixed(1)}deg  |  ` +
@@ -957,6 +998,12 @@ async function main() {
     pointSizeInput.addEventListener("input", () => {
       pointSizeScale = parseFloat(pointSizeInput.value);
       pointSizeValueEl.textContent = `${pointSizeScale.toFixed(2)}x`;
+      renderMap();
+    });
+    colorModeSelect.addEventListener("change", () => {
+      colorMode = colorModeSelect.value;
+      for (const el of document.querySelectorAll(".legend-status")) el.hidden = colorMode !== "status";
+      for (const el of document.querySelectorAll(".legend-redundancy")) el.hidden = colorMode !== "redundancy";
       renderMap();
     });
     if (latlonTransform) {

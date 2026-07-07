@@ -413,3 +413,20 @@ def compute_point_head_counts(results_for_point: list[ValidationResult]) -> tupl
         ):
             worst = (visible, total)
     return worst if worst is not None else (0, 0)
+
+
+def compute_point_min_visible(results_for_point: list[ValidationResult]) -> int:
+    """The waypoint's redundancy number: the minimum *absolute* count of
+    visible heads across its signal groups.
+
+    Deliberately not the same thing as `compute_point_head_counts`'
+    worst *ratio*: a group with 1 of 1 heads visible is 100% covered but
+    has zero redundancy -- lose that one head (occlusion, dirt, glare)
+    and the signal state is gone. 0 means some group is entirely
+    invisible (the point is not covered); 1 means covered with no
+    margin; 2+ means genuinely redundant observation of every group.
+    """
+    by_group: dict[str, int] = {}
+    for r in results_for_point:
+        by_group[r.group_id] = by_group.get(r.group_id, 0) + r.heads_visible
+    return min(by_group.values()) if by_group else 0

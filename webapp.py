@@ -33,7 +33,13 @@ from pathlib import Path
 from flask import Flask, Response, abort, jsonify, request
 
 from config import AppConfig, load_config
-from fov_simulator import SAMPLE_INTERVAL_M, compute_point_head_counts, compute_point_status, run_simulation
+from fov_simulator import (
+    SAMPLE_INTERVAL_M,
+    compute_point_head_counts,
+    compute_point_min_visible,
+    compute_point_status,
+    run_simulation,
+)
 from geometry_calculator import check_fov_inclusion, check_light_facing_camera
 from geometry_calculator import calc_camera_frame_offset, calc_centroid, calc_heading_yaw, calc_resample_by_distance
 from map_parser import parse_lanes, parse_latlon_transform, parse_nodes, parse_signal_heads, parse_traffic_lights
@@ -47,7 +53,7 @@ app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="")
 # Populated once by _load_data() or _deserialize_state() before the server
 # starts serving requests.
 _state: dict = {}
-_SNAPSHOT_FORMAT_VERSION = 8  # bumped for per-head visibility (tl_heads, heads_visible/heads_total)
+_SNAPSHOT_FORMAT_VERSION = 9  # bumped when min_heads_visible (redundancy) was added to points
 
 
 def _build_lane_yaw_lookup(lanes: list[LanePath]) -> dict[str, dict[tuple[float, float], float]]:
@@ -125,6 +131,7 @@ def _load_from_xml(xml_string: str, camera: CameraSpec, signal_types: set[str] |
     for p in points:
         p["status"] = compute_point_status(results_by_point[p["id"]])
         p["heads_visible"], p["heads_total"] = compute_point_head_counts(results_by_point[p["id"]])
+        p["min_heads_visible"] = compute_point_min_visible(results_by_point[p["id"]])
 
     _state.clear()
     _state.update(

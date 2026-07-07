@@ -24,14 +24,24 @@
         <label for="point-size">Point size</label>
         <input type="range" id="point-size" min="0.5" max="6" step="0.25" value="1" />
         <span id="point-size-value">1.0x</span>
+        <label for="color-mode">Color by</label>
+        <select id="color-mode">
+          <option value="status" selected>coverage status</option>
+          <option value="redundancy">visible heads (redundancy)</option>
+        </select>
         <label id="aerial-label"><input type="checkbox" id="aerial-toggle" /> Aerial photo</label>
         <span id="aerial-attribution" hidden>&#x51fa;&#x5178;: &#x5730;&#x7406;&#x9662;&#x30bf;&#x30a4;&#x30eb;</span>
       </div>
       <canvas id="map-canvas"></canvas>
       <div id="map-legend" class="legend">
-        <span><i class="dot" style="background:linear-gradient(90deg,#bae4b3,#2ca02c)"></i>covered (pale = fewer heads visible)</span>
-        <span><i class="dot" style="background:#ff7f0e"></i>facing away</span>
-        <span><i class="dot" style="background:#d62728"></i>out of FOV</span>
+        <span class="legend-status"><i class="dot" style="background:linear-gradient(90deg,#bae4b3,#2ca02c)"></i>covered (pale = fewer heads visible)</span>
+        <span class="legend-status"><i class="dot" style="background:#ff7f0e"></i>facing away</span>
+        <span class="legend-status"><i class="dot" style="background:#d62728"></i>out of FOV</span>
+        <span class="legend-redundancy" hidden><i class="dot" style="background:#d62728"></i>0 (blind)</span>
+        <span class="legend-redundancy" hidden><i class="dot" style="background:#ff7f0e"></i>1 head (no margin)</span>
+        <span class="legend-redundancy" hidden><i class="dot" style="background:#a6d96a"></i>2 heads</span>
+        <span class="legend-redundancy" hidden><i class="dot" style="background:#1a9641"></i>3 heads</span>
+        <span class="legend-redundancy" hidden><i class="dot" style="background:#00584a"></i>4+ heads</span>
         <span><i class="tri" style="border-left-color:gold"></i>vehicle signal</span>
         <span><i class="tri" style="border-left-color:#00bcd4"></i>pedestrian signal</span>
         <span><i class="dot" style="background:silver;border:1px solid black"></i>no stop line in map (direction unknown)</span>

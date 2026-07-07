@@ -750,3 +750,31 @@ Verified per-point too: the 66m two-head light from the previous
 section now reads covered with "1/2 heads", its two housings drawn
 separately (one solid in-FOV, one dashed outside) instead of one box
 floating between them. Snapshot format bumped to v8.
+
+## Redundancy view: ratio and absolute count are different questions
+
+Follow-up ask: visualize how many heads are visible, to gauge
+*redundancy*. That exposed a subtlety in the graded-green shading
+above: it encodes the weakest group's visible **fraction**, and a group
+with 1 of 1 heads visible is 100% -- full saturated green -- while
+having exactly zero redundancy (one occluded, dirty or glared head and
+the signal state is gone). Fraction answers "how much of what's there
+do I see"; redundancy answers "how many independent observations do I
+have". Both are kept, as separate things:
+
+- `compute_point_min_visible` (fov_simulator.py): the minimum
+  *absolute* count of visible heads across the waypoint's groups -- its
+  redundancy number. 0 = some group entirely invisible (not covered),
+  1 = covered with no margin, 2+ = genuinely redundant.
+- The map gains a "Color by" selector: "coverage status" (the existing
+  status colors + ratio-graded green) vs "visible heads (redundancy)",
+  a discrete 5-color scale (red 0 / orange 1 / light green 2 / green 3
+  / dark teal 4+). Discrete colors, not a gradient, because the
+  quantity is discrete -- and the interesting boundary (1 vs 2) needs
+  to be unmissable. The legend switches with the mode.
+- `main.py` prints the histogram. Bundled map, vehicle spec 20-250m:
+  blind 23.8%, **covered-with-no-margin 13.3%**, two heads 29.0%, 3+
+  34.0% -- i.e. more than a third of nominally "covered" road length
+  rides on a single head.
+- The point-info line reports both: "weakest group: k/n heads visible |
+  redundancy: m". Snapshot format v9 (points carry min_heads_visible).

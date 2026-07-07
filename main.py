@@ -20,7 +20,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from config import AppConfig, load_config
-from fov_simulator import compute_point_status, run_simulation
+from fov_simulator import compute_point_min_visible, compute_point_status, run_simulation
 from map_parser import parse_lanes, parse_nodes, parse_traffic_lights
 from models import ValidationResult
 from visualizer import plot_results
@@ -140,10 +140,23 @@ def main() -> None:
         _print_breakdown(st, [r for r in results if r.signal_type == st])
 
     if results:
-        blind_lanes = {
-            lane_id for (lane_id, _, _), rs in _group_by_point(results).items() if compute_point_status(rs) != "covered"
-        }
+        by_point = _group_by_point(results)
+        blind_lanes = {lane_id for (lane_id, _, _), rs in by_point.items() if compute_point_status(rs) != "covered"}
         print(f"Lanes with at least one blind waypoint: {len(blind_lanes)} / {len(lanes)}")
+
+        # redundancy: min *absolute* visible head count across a waypoint's
+        # groups. 1 = covered with zero margin (one occluded/dirty head
+        # loses the signal); 2+ = genuinely redundant observation.
+        redundancy_hist: dict[str, int] = {"0 (blind)": 0, "1 (no margin)": 0, "2": 0, "3+": 0}
+        for rs in by_point.values():
+            n = compute_point_min_visible(rs)
+            key = "3+" if n >= 3 else "0 (blind)" if n == 0 else "1 (no margin)" if n == 1 else "2"
+            redundancy_hist[key] += 1
+        total = len(by_point)
+        print(
+            "  redundancy (min visible heads per waypoint): "
+            + " | ".join(f"{k}: {v} ({v / total:.1%})" for k, v in redundancy_hist.items())
+        )
 
     plotted_lights = traffic_lights if signal_types is None else [tl for tl in traffic_lights if tl.signal_type in signal_types]
     plot_results(

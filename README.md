@@ -307,6 +307,15 @@ per candidate ("heads k/n") and per waypoint (the worst group's count,
 also encoded in the covered dots' green shade -- pale means one head is
 doing all the work).
 
+For redundancy specifically, the viewer's "Color by" selector switches
+the map to a discrete visible-head-count scale (red 0 / orange 1 /
+light green 2 / green 3 / dark teal 4+), using each waypoint's
+*minimum absolute* visible count across its signal groups
+(`compute_point_min_visible`) -- deliberately not the fraction, since 1
+of 1 heads is 100% covered yet has zero redundancy. `main.py` prints
+the same distribution as a histogram (on the bundled map, 13.3% of
+waypoints are covered by exactly one head -- no margin).
+
 ```
 Side view, same waypoint (vertical FOV / pitch check)
 ======================================================

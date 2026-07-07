@@ -4,7 +4,13 @@ signal_type filtering, and combining in_fov/facing_camera into
 is_covered -- independently testable from Module B.
 """
 
-from fov_simulator import _build_lane_relevant_tl_ids, compute_point_head_counts, compute_point_status, run_simulation
+from fov_simulator import (
+    _build_lane_relevant_tl_ids,
+    compute_point_head_counts,
+    compute_point_min_visible,
+    compute_point_status,
+    run_simulation,
+)
 from models import CameraSpec, LanePath, Point3D, SignalHead, TrafficLight, ValidationResult
 
 STRAIGHT_LANE = LanePath(
@@ -352,3 +358,27 @@ def test_compute_point_head_counts_returns_worst_group():
 
 def test_compute_point_head_counts_empty():
     assert compute_point_head_counts([]) == (0, 0)
+
+
+def test_compute_point_min_visible_is_absolute_count_not_ratio():
+    # g1: 1 of 1 heads visible (100% but zero redundancy); g2: 2 of 6
+    # visible (33%, but two independent heads). The worst *ratio* group is
+    # g2, yet the redundancy bottleneck is g1's single head.
+    results = [_head_result("g1", 1, 1), _head_result("g2", 2, 6)]
+    assert compute_point_head_counts(results) == (2, 6)  # ratio view
+    assert compute_point_min_visible(results) == 1  # redundancy view
+
+
+def test_compute_point_min_visible_sums_within_group_before_taking_min():
+    # g1's two lights contribute 1+2=3 visible heads; g2 has 2
+    results = [_head_result("g1", 1, 2), _head_result("g1", 2, 3), _head_result("g2", 2, 2)]
+    assert compute_point_min_visible(results) == 2
+
+
+def test_compute_point_min_visible_zero_when_any_group_blind():
+    results = [_head_result("g1", 3, 3), _head_result("g2", 0, 2)]
+    assert compute_point_min_visible(results) == 0
+
+
+def test_compute_point_min_visible_empty():
+    assert compute_point_min_visible([]) == 0
