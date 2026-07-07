@@ -138,8 +138,9 @@ def test_points_endpoint_returns_expected_shape(client):
     res = client.get("/api/points")
     data = res.get_json()
     assert isinstance(data, list) and len(data) > 0
-    assert set(data[0].keys()) == {"id", "lane_id", "x", "y", "z", "status"}
+    assert set(data[0].keys()) == {"id", "lane_id", "x", "y", "z", "status", "heads_visible", "heads_total"}
     assert data[0]["status"] in {"covered", "facing_away", "out_of_fov"}
+    assert 0 <= data[0]["heads_visible"] <= data[0]["heads_total"]
 
 
 def test_traffic_lights_endpoint(client):

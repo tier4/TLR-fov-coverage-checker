@@ -293,8 +293,19 @@ Top-down view, one lane waypoint vs. one traffic light
 
   in_fov         = |angle(cam_yaw, bearing(camera -> light))|    <= fov_h / 2   (fov_v checked the same way, using pitch)
   facing_camera  = |angle(facing_yaw, bearing(light -> camera))| <= facing_tolerance_deg   (True if facing_yaw is unknown)
-  is_covered     = in_fov AND facing_camera
+  head visible   = in_fov AND facing_camera
 ```
+
+Both checks run *per physical head* (a regulatory element usually
+bundles 2-4 housings meters apart; `TrafficLight.heads`), and the light
+`is_covered` if any one head passes -- seeing one head is seeing the
+light. The pooled bulb centroid stays as the representative point for
+distance, the range prefilter and map markers.
+`ValidationResult.heads_visible / heads_total` additionally grade how
+many of the housings are individually visible, which the viewer shows
+per candidate ("heads k/n") and per waypoint (the worst group's count,
+also encoded in the covered dots' green shade -- pale means one head is
+doing all the work).
 
 ```
 Side view, same waypoint (vertical FOV / pitch check)

@@ -225,13 +225,22 @@ def run_simulation(
     if signal_types is not None:
         traffic_lights = [tl for tl in traffic_lights if tl.signal_type in signal_types]
     tl_targets = [
-        (tl.id, tl.signal_type, tl.group_id, tl.facing_yaw, calc_centroid(tl.bulbs))
+        # heads fall back to the pooled centroid as a single pseudo-head so
+        # a TrafficLight built without per-head data behaves as before
+        (
+            tl.id,
+            tl.signal_type,
+            tl.group_id,
+            tl.facing_yaw,
+            calc_centroid(tl.bulbs),
+            [h.pos for h in tl.heads] or [calc_centroid(tl.bulbs)],
+        )
         for tl in traffic_lights
         if tl.bulbs
     ]
     if not tl_targets:
         return []
-    tl_xyz = np.array([[p.x, p.y, p.z] for _, _, _, _, p in tl_targets], dtype=float)
+    tl_xyz = np.array([[p.x, p.y, p.z] for _, _, _, _, p, _ in tl_targets], dtype=float)
 
     lane_relevant_tl_ids = _build_lane_relevant_tl_ids(lanes, traffic_lights, camera.max_range)
 
@@ -261,7 +270,7 @@ def run_simulation(
                 else:
                     yaw_cache[i] = calc_heading_yaw(sampled[i - 1], sampled[i])
 
-            tl_id, signal_type, group_id, facing_yaw, tl_pos = tl_targets[j]
+            tl_id, signal_type, group_id, facing_yaw, tl_pos, head_positions = tl_targets[j]
             cam_pos = cam_positions[i]
 
             if signal_type == "vehicle" and lane_tl_ids is not None:
@@ -282,24 +291,45 @@ def run_simulation(
             ):
                 continue
 
-            in_fov = check_fov_inclusion(
-                cam_pos=cam_pos,
-                cam_yaw=yaw_cache[i],
-                cam_pitch=0.0,
-                target_pos=tl_pos,
-                fov_h=camera.fov_h,
-                fov_v=camera.fov_v,
-            )
-            facing_camera = (
-                True
-                if facing_yaw is None
-                else check_light_facing_camera(
-                    tl_pos=tl_pos,
-                    tl_facing_yaw=facing_yaw,
+            # Judged per physical head, not at the pooled centroid: a
+            # regulatory element often bundles 2-4 housings meters apart,
+            # and the centroid can sit where no housing exists (in-FOV
+            # judged there was measurably wrong at FOV edges). Seeing any
+            # one head is seeing the light; heads_visible/heads_total keep
+            # the finer "how many of them" grading for display.
+            heads_visible = 0
+            any_head_in_fov = False
+            any_head_facing = False
+            for head_pos in head_positions:
+                head_in_fov = check_fov_inclusion(
                     cam_pos=cam_pos,
-                    max_angle_diff=camera.facing_tolerance_deg,
+                    cam_yaw=yaw_cache[i],
+                    cam_pitch=0.0,
+                    target_pos=head_pos,
+                    fov_h=camera.fov_h,
+                    fov_v=camera.fov_v,
                 )
-            )
+                head_facing = (
+                    True
+                    if facing_yaw is None
+                    else check_light_facing_camera(
+                        tl_pos=head_pos,
+                        tl_facing_yaw=facing_yaw,
+                        cam_pos=cam_pos,
+                        max_angle_diff=camera.facing_tolerance_deg,
+                    )
+                )
+                any_head_in_fov = any_head_in_fov or head_in_fov
+                any_head_facing = any_head_facing or head_facing
+                if head_in_fov and head_facing:
+                    heads_visible += 1
+
+            is_covered = heads_visible >= 1
+            # facing_camera keeps its role in status classification
+            # (in_fov and not facing_camera => "facing_away"): while any
+            # head is in FOV it answers "was the light readable there";
+            # out of FOV it stays purely informational.
+            facing_camera = is_covered if any_head_in_fov else any_head_facing
 
             results.append(
                 ValidationResult(
@@ -309,9 +339,11 @@ def run_simulation(
                     signal_type=signal_type,
                     group_id=group_id,
                     distance_m=float(dist[i, j]),
-                    in_fov=in_fov,
+                    in_fov=any_head_in_fov,
                     facing_camera=facing_camera,
-                    is_covered=in_fov and facing_camera,
+                    is_covered=is_covered,
+                    heads_total=len(head_positions),
+                    heads_visible=heads_visible,
                 )
             )
 
@@ -352,3 +384,32 @@ def compute_point_status(results_for_point: list[ValidationResult]) -> str:
     if failed_group_has_facing_away:
         return "facing_away"
     return "out_of_fov"
+
+
+def compute_point_head_counts(results_for_point: list[ValidationResult]) -> tuple[int, int]:
+    """The finer-grained companion to `compute_point_status`: of the signal
+    heads the waypoint is supposed to see, how many are actually visible?
+
+    Sums heads_visible/heads_total per group (a group's heads span every
+    redundant light sharing its stop line) and returns the (visible,
+    total) of the *worst-ratio* group -- the point's weakest link, same
+    per-group framing as the status. A covered point can still be
+    fragile: (1, 6) means one visible head out of six is doing all the
+    work, while (6, 6) has full redundancy. Ties on ratio resolve to the
+    larger total (more heads missing in absolute terms).
+    """
+    by_group: dict[str, list[ValidationResult]] = {}
+    for r in results_for_point:
+        by_group.setdefault(r.group_id, []).append(r)
+
+    worst: tuple[int, int] | None = None
+    for group_results in by_group.values():
+        visible = sum(r.heads_visible for r in group_results)
+        total = sum(r.heads_total for r in group_results)
+        if total == 0:
+            continue
+        if worst is None or visible * worst[1] < worst[0] * total or (
+            visible * worst[1] == worst[0] * total and total > worst[1]
+        ):
+            worst = (visible, total)
+    return worst if worst is not None else (0, 0)

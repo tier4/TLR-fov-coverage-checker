@@ -645,14 +645,13 @@ matching its mapped bulbs one-for-one.
 
 One honest wrinkle this made visible: a regulatory element usually
 bundles *several* physical heads (2-4 on most -- see map_schema.md), and
-the simulation treats them as one light at the pooled bulb centroid.
-With lamps drawn at their true positions, that pooling shows: the
-status box (drawn at the centroid) can float between two lamp clusters,
-at a spot where no physical housing exists, and the in-FOV judgment is
-made for that centroid rather than per head. Splitting per-head (the
-`traffic_light_id` back-references make it possible) would be a real
-simulation-semantics change, not just cosmetics -- left as known future
-work.
+the simulation treated them as one light at the pooled bulb centroid.
+With lamps drawn at their true positions, that pooling showed: the
+status box (drawn at the centroid) could float between two lamp
+clusters, at a spot where no physical housing exists, and the in-FOV
+judgment was made for that centroid rather than per head. This was
+subsequently fixed -- see "Visibility is judged per physical head"
+below.
 
 ## Signal pattern catalog, and how the UI absorbed a second task
 
@@ -711,3 +710,43 @@ that lack the data. At viewer scale a vehicle light at 100m spans
 ~0.7deg of the 30deg FOV -- the boxes make it immediately visible how
 thin the margin is at max_range. A 2.5px center dot stays drawn on top
 so a light at 250m (box under ~4px) doesn't vanish entirely.
+
+## Visibility is judged per physical head, with a graded head count
+
+The follow-up to the pooled-centroid wrinkle above, requested once the
+lamp rendering made it visible. `TrafficLight.heads` (one `SignalHead`
+per `light_bulbs` way, each with its own bulb centroid and its own
+panel dimensions via the `traffic_light_id` back-reference) now drives
+the judgment in `run_simulation`: each head is checked for FOV
+inclusion and facing individually, and the light `is_covered` if *any*
+head passes -- seeing one head is seeing the light. The pooled centroid
+is kept as the representative point (distance, range prefilter, map
+marker, ahead-check), per the user's explicit ask.
+
+On top of the boolean, `ValidationResult.heads_visible/heads_total`
+grade the answer, and `compute_point_head_counts` rolls them up per
+waypoint the same way `compute_point_status` does: summed per group
+(all redundant lights sharing a stop line pool their heads), reporting
+the *worst-ratio* group -- the point's weakest link. A covered point at
+(1, 6) is one visible head doing all the work; (6, 6) is fully
+redundant coverage.
+
+Visualization: covered map dots shade from pale green (low fraction) to
+the standard full green (all heads visible), bucketed into 5 shades so
+~90k points still render fast; the interpolation endpoints live in one
+small `coveredShade()` function precisely so the emphasis (or a shape
+change instead) is easy to retune later, as anticipated. The camera
+view now draws one box per housing at its own projected position and
+mapped size -- visible heads solid, invisible ones faint and dashed --
+which finally removes the floating-centroid box entirely. The candidate
+table gains a "heads k/n" column and the point-info line reports the
+weakest group.
+
+Measured impact on the bundled map (vehicle spec, 20-250m): coverage
+73.8% -> 76.2%. The gain is exactly the fixed failure mode: waypoints
+where an individual head sat inside the FOV while the pooled centroid
+-- sometimes a point in empty space between housings -- fell outside.
+Verified per-point too: the 66m two-head light from the previous
+section now reads covered with "1/2 heads", its two housings drawn
+separately (one solid in-FOV, one dashed outside) instead of one box
+floating between them. Snapshot format bumped to v8.

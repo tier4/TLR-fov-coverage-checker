@@ -33,7 +33,8 @@ from pathlib import Path
 from flask import Flask, Response, abort, jsonify, request
 
 from config import AppConfig, load_config
-from fov_simulator import SAMPLE_INTERVAL_M, compute_point_status, run_simulation
+from fov_simulator import SAMPLE_INTERVAL_M, compute_point_head_counts, compute_point_status, run_simulation
+from geometry_calculator import check_fov_inclusion, check_light_facing_camera
 from geometry_calculator import calc_camera_frame_offset, calc_centroid, calc_heading_yaw, calc_resample_by_distance
 from map_parser import parse_lanes, parse_latlon_transform, parse_nodes, parse_signal_heads, parse_traffic_lights
 from models import CameraSpec, LanePath, Point3D, ValidationResult
@@ -46,7 +47,7 @@ app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="")
 # Populated once by _load_data() or _deserialize_state() before the server
 # starts serving requests.
 _state: dict = {}
-_SNAPSHOT_FORMAT_VERSION = 7  # bumped when signal_heads was added to the schema
+_SNAPSHOT_FORMAT_VERSION = 8  # bumped for per-head visibility (tl_heads, heads_visible/heads_total)
 
 
 def _build_lane_yaw_lookup(lanes: list[LanePath]) -> dict[str, dict[tuple[float, float], float]]:
@@ -95,6 +96,14 @@ def _load_from_xml(xml_string: str, camera: CameraSpec, signal_types: set[str] |
         for tl in traffic_lights
         if tl.bulbs
     }
+    tl_heads = {
+        tl.id: [
+            {"x": h.pos.x, "y": h.pos.y, "z": h.pos.z, "panel_width": h.panel_width, "panel_height": h.panel_height}
+            for h in tl.heads
+        ]
+        for tl in traffic_lights
+        if tl.bulbs
+    }
     yaw_lookup = _build_lane_yaw_lookup(lanes)
     latlon_transform = parse_latlon_transform(xml_string)
     signal_heads = parse_signal_heads(xml_string, nodes)
@@ -115,6 +124,7 @@ def _load_from_xml(xml_string: str, camera: CameraSpec, signal_types: set[str] |
 
     for p in points:
         p["status"] = compute_point_status(results_by_point[p["id"]])
+        p["heads_visible"], p["heads_total"] = compute_point_head_counts(results_by_point[p["id"]])
 
     _state.clear()
     _state.update(
@@ -127,6 +137,7 @@ def _load_from_xml(xml_string: str, camera: CameraSpec, signal_types: set[str] |
         tl_signal_type=tl_signal_type,
         tl_panel_size=tl_panel_size,
         tl_lamps=tl_lamps,
+        tl_heads=tl_heads,
         signal_heads=signal_heads,
         yaw_lookup=yaw_lookup,
         latlon_transform=latlon_transform,
@@ -167,6 +178,8 @@ def _serialize_state() -> dict:
                     "in_fov": r.in_fov,
                     "facing_camera": r.facing_camera,
                     "is_covered": r.is_covered,
+                    "heads_total": r.heads_total,
+                    "heads_visible": r.heads_visible,
                 }
                 for r in candidates
             ]
@@ -177,6 +190,7 @@ def _serialize_state() -> dict:
         "tl_signal_type": _state["tl_signal_type"],
         "tl_panel_size": _state["tl_panel_size"],
         "tl_lamps": _state["tl_lamps"],
+        "tl_heads": _state["tl_heads"],
         "signal_heads": _state["signal_heads"],
         "yaw_lookup": {
             lane_id: [[x, y, yaw] for (x, y), yaw in per_lane.items()]
@@ -203,6 +217,7 @@ def _deserialize_state(data: dict) -> None:
     tl_signal_type = data["tl_signal_type"]
     tl_panel_size = data["tl_panel_size"]
     tl_lamps = data["tl_lamps"]
+    tl_heads = data["tl_heads"]
     signal_heads = data["signal_heads"]
     yaw_lookup = {
         lane_id: {(x, y): yaw for x, y, yaw in entries} for lane_id, entries in data["yaw_lookup"].items()
@@ -223,6 +238,8 @@ def _deserialize_state(data: dict) -> None:
                 in_fov=c["in_fov"],
                 facing_camera=c["facing_camera"],
                 is_covered=c["is_covered"],
+                heads_total=c["heads_total"],
+                heads_visible=c["heads_visible"],
             )
             for c in candidates
         ]
@@ -239,6 +256,7 @@ def _deserialize_state(data: dict) -> None:
         tl_signal_type=tl_signal_type,
         tl_panel_size=tl_panel_size,
         tl_lamps=tl_lamps,
+        tl_heads=tl_heads,
         signal_heads=signal_heads,
         yaw_lookup=yaw_lookup,
         latlon_transform=data["latlon_transform"],
@@ -447,6 +465,8 @@ def point_candidates(point_id: int):
 
     tl_panel_size = _state["tl_panel_size"]
     tl_lamps = _state["tl_lamps"]
+    tl_heads = _state["tl_heads"]
+    tl_facing_yaw = _state["tl_facing_yaw"]
     candidates = []
     for r in point_results:
         target_pos = _state["tl_positions"][r.target_tl_id]
@@ -464,6 +484,34 @@ def point_candidates(point_id: int):
                 {"yaw_diff": lamp_yaw, "pitch_diff": lamp_pitch, "color": lamp["color"], "arrow": lamp["arrow"]}
             )
 
+        # per-head projection + the same visibility check the simulator
+        # ran (identical geometry functions and inputs), so the frame view
+        # can draw each physical housing at its own position with its own
+        # visible/not-visible state instead of one box at the pooled
+        # centroid -- which can sit between housings, where nothing exists
+        facing_yaw = tl_facing_yaw.get(r.target_tl_id)
+        heads = []
+        for h in tl_heads.get(r.target_tl_id, []):
+            head_pos = Point3D(h["x"], h["y"], h["z"])
+            head_yaw, head_pitch = calc_camera_frame_offset(cam_pos, cam_yaw, 0.0, head_pos)
+            head_in_fov = check_fov_inclusion(
+                cam_pos=cam_pos, cam_yaw=cam_yaw, cam_pitch=0.0, target_pos=head_pos,
+                fov_h=camera.fov_h, fov_v=camera.fov_v,
+            )
+            head_facing = True if facing_yaw is None else check_light_facing_camera(
+                tl_pos=head_pos, tl_facing_yaw=facing_yaw, cam_pos=cam_pos,
+                max_angle_diff=camera.facing_tolerance_deg,
+            )
+            heads.append(
+                {
+                    "yaw_diff": head_yaw,
+                    "pitch_diff": head_pitch,
+                    "panel_width": h["panel_width"],
+                    "panel_height": h["panel_height"],
+                    "visible": head_in_fov and head_facing,
+                }
+            )
+
         candidates.append(
             {
                 "target_tl_id": r.target_tl_id,
@@ -474,6 +522,8 @@ def point_candidates(point_id: int):
                 "in_fov": r.in_fov,
                 "facing_camera": r.facing_camera,
                 "is_covered": r.is_covered,
+                "heads_total": r.heads_total,
+                "heads_visible": r.heads_visible,
                 "yaw_diff": yaw_diff,
                 "pitch_diff": pitch_diff,
                 "norm_x": yaw_diff / (camera.fov_h / 2.0),
@@ -481,6 +531,7 @@ def point_candidates(point_id: int):
                 "panel_width": panel_width,
                 "panel_height": panel_height,
                 "lamps": lamps,
+                "heads": heads,
             }
         )
 

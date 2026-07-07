@@ -4,8 +4,8 @@ signal_type filtering, and combining in_fov/facing_camera into
 is_covered -- independently testable from Module B.
 """
 
-from fov_simulator import _build_lane_relevant_tl_ids, compute_point_status, run_simulation
-from models import CameraSpec, LanePath, Point3D, TrafficLight, ValidationResult
+from fov_simulator import _build_lane_relevant_tl_ids, compute_point_head_counts, compute_point_status, run_simulation
+from models import CameraSpec, LanePath, Point3D, SignalHead, TrafficLight, ValidationResult
 
 STRAIGHT_LANE = LanePath(
     id="lane-1",
@@ -285,3 +285,70 @@ def test_compute_point_status_prefers_facing_away_reason_when_present():
     # least one failed group had a light that was geometrically visible.
     results = [_result("light-A", "g1", False, True), _result("light-B", "g2", True, False)]
     assert compute_point_status(results) == "facing_away"
+
+
+def test_run_simulation_judges_visibility_per_head_not_pooled_centroid():
+    # Head A dead ahead (bearing 0, inside the +-15deg FOV); head B at
+    # (70, 60), bearing ~41deg (well outside). Their pooled centroid sits
+    # at (85, 30), bearing ~19.4deg -- ALSO outside the FOV -- so the old
+    # centroid-based judgment called this light not covered even though a
+    # real camera plainly sees head A. Per-head judgment must cover it,
+    # with 1 of 2 heads visible.
+    two_heads = TrafficLight(
+        id="two-heads",
+        bulbs=[Point3D(100.0, 0.0, 5.0), Point3D(70.0, 60.0, 5.0)],
+        signal_type="vehicle",
+        facing_yaw=180.0,
+        heads=(
+            SignalHead(pos=Point3D(100.0, 0.0, 5.0)),
+            SignalHead(pos=Point3D(70.0, 60.0, 5.0)),
+        ),
+    )
+    lane = LanePath(id="lane-1", center_line=[Point3D(0, 0, 0), Point3D(2, 0, 0)], direct_tl_ids=[], next_lane_ids=[])
+    results = run_simulation([lane], [two_heads], camera=CameraSpec(min_range=10.0, max_range=200.0))
+    assert results
+    r = results[0]
+    assert r.is_covered
+    assert r.heads_total == 2
+    assert r.heads_visible == 1
+    assert r.in_fov  # at least one head is in FOV
+
+
+def test_run_simulation_without_heads_falls_back_to_centroid_as_single_head():
+    light = TrafficLight(id="plain", bulbs=[Point3D(100.0, 0.0, 5.0)], signal_type="vehicle", facing_yaw=180.0)
+    results = run_simulation([STRAIGHT_LANE], [light])
+    assert results
+    assert all(r.heads_total == 1 for r in results)
+    assert any(r.is_covered and r.heads_visible == 1 for r in results)
+
+
+def _head_result(group_id, heads_visible, heads_total):
+    return ValidationResult(
+        lane_id="lane-1",
+        point=Point3D(0.0, 0.0, 0.0),
+        target_tl_id=f"{group_id}-{heads_visible}",
+        signal_type="vehicle",
+        group_id=group_id,
+        distance_m=100.0,
+        in_fov=heads_visible > 0,
+        facing_camera=heads_visible > 0,
+        is_covered=heads_visible > 0,
+        heads_total=heads_total,
+        heads_visible=heads_visible,
+    )
+
+
+def test_compute_point_head_counts_sums_within_group():
+    # one group, two lights: 2/3 + 1/2 -> 3/5 for the group
+    results = [_head_result("g1", 2, 3), _head_result("g1", 1, 2)]
+    assert compute_point_head_counts(results) == (3, 5)
+
+
+def test_compute_point_head_counts_returns_worst_group():
+    # g1 fully visible (2/2), g2 barely visible (1/4) -> weakest link is g2
+    results = [_head_result("g1", 2, 2), _head_result("g2", 1, 4)]
+    assert compute_point_head_counts(results) == (1, 4)
+
+
+def test_compute_point_head_counts_empty():
+    assert compute_point_head_counts([]) == (0, 0)

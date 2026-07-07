@@ -181,6 +181,16 @@ function drawAerial(ctx) {
   ctx.fillRect(0, 0, w, h);
 }
 
+// Shade for a covered waypoint by its weakest group's visible-head
+// fraction: ratio 1.0 = the standard covered green, lower = paler.
+// Interpolation endpoints are easy to retune if the gradation needs a
+// different emphasis (or swap this for a shape change instead).
+function coveredShade(ratio) {
+  const t = Math.max(0, Math.min(1, ratio));
+  const lerp = (a, b) => Math.round(a + (b - a) * t);
+  return `rgb(${lerp(186, 44)}, ${lerp(228, 160)}, ${lerp(179, 44)})`;
+}
+
 // world <-> screen transform state for the map pane
 const view = { scale: 1, offsetX: 0, offsetY: 0 };
 
@@ -324,6 +334,26 @@ function renderMap() {
 
   const dotSize = Math.max(1, Math.min(2.2, view.scale * 0.15)) * pointSizeScale;
   for (const status of STATUS_DRAW_ORDER) {
+    if (status === "covered") {
+      // graded green: a covered point's shade encodes its weakest group's
+      // visible-head fraction (pale = 1 of many heads doing all the work,
+      // saturated = every head visible). Bucketed to 5 shades so ~100k
+      // points still draw in a handful of fillStyle changes.
+      const buckets = [[], [], [], [], []];
+      for (const p of byStatus.covered) {
+        const ratio = p.heads_total > 0 ? p.heads_visible / p.heads_total : 1;
+        buckets[Math.max(0, Math.min(4, Math.round(ratio * 4)))].push(p);
+      }
+      for (let b = 0; b < 5; b++) {
+        if (!buckets[b].length) continue;
+        ctx.fillStyle = coveredShade(b / 4);
+        for (const p of buckets[b]) {
+          const [sx, sy] = worldToScreen(p.x, p.y);
+          ctx.fillRect(sx - dotSize / 2, sy - dotSize / 2, dotSize, dotSize);
+        }
+      }
+      continue;
+    }
     ctx.fillStyle = STATUS_COLOR[status];
     for (const p of byStatus[status]) {
       const [sx, sy] = worldToScreen(p.x, p.y);
@@ -466,11 +496,13 @@ async function selectPoint(pointId) {
 
 function renderPointInfo(detail) {
   const p = detail.point;
+  const sel = selectedPointId !== null ? points[selectedPointId] : null;
+  const headsNote = sel && sel.heads_total > 0 ? `  |  weakest group: ${sel.heads_visible}/${sel.heads_total} heads visible` : "";
   pointInfoEl.textContent =
     `lane ${p.lane_id} @ (${p.x.toFixed(1)}, ${p.y.toFixed(1)})  |  ` +
     `cam_yaw=${detail.cam_yaw.toFixed(1)}deg  |  ` +
     `FOV ${detail.fov_h}x${detail.fov_v} deg  |  ${detail.candidates.length} candidate(s)  |  ` +
-    `status=${detail.status}`;
+    `status=${detail.status}${headsNote}`;
 
   const ll = worldToLatLon(p.x, p.y);
   if (ll) {
@@ -505,6 +537,12 @@ function renderCandidateTable(detail) {
     tr.appendChild(cell(c.in_fov ? "yes" : "no", c.in_fov ? "status-true" : "status-false"));
     tr.appendChild(cell(c.facing_camera ? "yes" : "no", c.facing_camera ? "status-true" : "status-false"));
     tr.appendChild(cell(c.is_covered ? "yes" : "no", c.is_covered ? "status-true" : "status-false"));
+    tr.appendChild(
+      cell(
+        `${c.heads_visible}/${c.heads_total}`,
+        c.heads_visible === c.heads_total ? "status-true" : c.heads_visible > 0 ? "" : "status-false"
+      )
+    );
     tr.appendChild(cell(c.group_covered ? "yes" : "no", c.group_covered ? "status-true" : "status-false"));
     candidateTbody.appendChild(tr);
   }
@@ -578,23 +616,36 @@ function renderFrame(detail) {
     const [sx, sy] = toScreen(c.yaw_diff, c.pitch_diff);
     const color = c.is_covered ? STATUS_COLOR.covered : c.in_fov ? STATUS_COLOR.facing_away : STATUS_COLOR.out_of_fov;
 
-    // apparent angular size of the signal housing at this distance:
-    // small-angle-free, 2*atan(half-size / distance). Real per-light
-    // dimensions from the map when available, typical-housing fallback
-    // otherwise.
+    // One box per physical housing, each at its own projected position
+    // and its own mapped size -- not one box at the pooled centroid,
+    // which can sit between housings where nothing physically exists.
+    // Heads that are individually visible (in FOV + facing) draw solid;
+    // the rest draw faint and dashed. Falls back to a single
+    // centroid-box for data without per-head detail (old snapshots).
     const fallback = SIGNAL_HOUSING_M[c.signal_type] || SIGNAL_HOUSING_M.unknown;
-    const wM = c.panel_width ?? fallback.w;
-    const hM = c.panel_height ?? fallback.h;
-    const wDeg = 2 * Math.atan2(wM / 2, c.distance_m) * (180 / Math.PI);
-    const hDeg = 2 * Math.atan2(hM / 2, c.distance_m) * (180 / Math.PI);
-    const rw = wDeg * pxPerDeg, rh = hDeg * pxPerDeg;
-    ctx.fillStyle = color;
-    ctx.globalAlpha = 0.4;
-    ctx.fillRect(sx - rw / 2, sy - rh / 2, rw, rh);
-    ctx.globalAlpha = 1.0;
-    ctx.strokeStyle = color;
-    ctx.lineWidth = 1;
-    ctx.strokeRect(sx - rw / 2, sy - rh / 2, rw, rh);
+    const headList = (c.heads && c.heads.length)
+      ? c.heads
+      : [{ yaw_diff: c.yaw_diff, pitch_diff: c.pitch_diff, panel_width: c.panel_width, panel_height: c.panel_height, visible: c.is_covered }];
+    let labelRw = 0, labelRh = 0;
+    for (const head of headList) {
+      const wM = head.panel_width ?? fallback.w;
+      const hM = head.panel_height ?? fallback.h;
+      const wDeg = 2 * Math.atan2(wM / 2, c.distance_m) * (180 / Math.PI);
+      const hDeg = 2 * Math.atan2(hM / 2, c.distance_m) * (180 / Math.PI);
+      const rw = wDeg * pxPerDeg, rh = hDeg * pxPerDeg;
+      labelRw = Math.max(labelRw, rw); labelRh = Math.max(labelRh, rh);
+      const [hx, hy] = toScreen(head.yaw_diff, head.pitch_diff);
+      ctx.fillStyle = color;
+      ctx.globalAlpha = head.visible ? 0.4 : 0.15;
+      ctx.fillRect(hx - rw / 2, hy - rh / 2, rw, rh);
+      ctx.globalAlpha = 1.0;
+      ctx.strokeStyle = color;
+      ctx.lineWidth = 1;
+      ctx.setLineDash(head.visible ? [] : [4, 3]);
+      ctx.strokeRect(hx - rw / 2, hy - rh / 2, rw, rh);
+      ctx.setLineDash([]);
+    }
+    const rw = labelRw, rh = labelRh;
 
     // Individual lamps at their true projected positions (each bulb is
     // mapped and projected separately, so an obliquely-viewed housing
@@ -624,7 +675,12 @@ function renderFrame(detail) {
 
     ctx.fillStyle = "white";
     ctx.font = "10px sans-serif";
-    ctx.fillText(`${c.target_tl_id} (${c.distance_m.toFixed(0)}m)`, sx + Math.max(8, rw / 2 + 4), sy - Math.max(8, rh / 2 + 4));
+    const headsNote = c.heads_total > 1 ? `, ${c.heads_visible}/${c.heads_total} heads` : "";
+    ctx.fillText(
+      `${c.target_tl_id} (${c.distance_m.toFixed(0)}m${headsNote})`,
+      sx + Math.max(8, rw / 2 + 4),
+      sy - Math.max(8, rh / 2 + 4)
+    );
   }
 }
 

@@ -47,7 +47,7 @@ import xml.etree.ElementTree as ET
 import numpy as np
 
 from geometry_calculator import calc_center_line, calc_centroid, calc_distance_3d, calc_heading_yaw
-from models import Lamp, LanePath, Point3D, TrafficLight
+from models import Lamp, LanePath, Point3D, SignalHead, TrafficLight
 
 _VEHICLE_SUBTYPES = {"red_yellow_green"}
 _PEDESTRIAN_SUBTYPES = {"red_green"}
@@ -173,29 +173,61 @@ def parse_traffic_lights(xml_string: str, nodes: dict[str, Point3D]) -> list[Tra
         if rel_id is None:
             continue
 
-        bulbs: list[Point3D] = []
-        lamps: list[Lamp] = []
         refers_ref: str | None = None
         ref_line_ref: str | None = None
         for member in rel_elem.findall("member"):
             role = member.get("role")
-            if role == "light_bulbs":
-                for node_id in ways.get(member.get("ref"), []):
-                    point = nodes.get(node_id)
-                    if point is not None:
-                        bulbs.append(point)
-                        node_elem = node_elems.get(node_id)
-                        lamps.append(
-                            Lamp(
-                                pos=point,
-                                color=_get_tag(node_elem, "color") if node_elem is not None else None,
-                                arrow=_get_tag(node_elem, "arrow") if node_elem is not None else None,
-                            )
-                        )
-            elif role == "refers" and refers_ref is None:
+            if role == "refers" and refers_ref is None:
                 refers_ref = member.get("ref")
             elif role == "ref_line" and ref_line_ref is None:
                 ref_line_ref = member.get("ref")
+
+        def _panel_dims(panel_ref: str | None) -> tuple[float | None, float | None]:
+            panel_elem = way_elems.get(panel_ref) if panel_ref else None
+            if panel_elem is None:
+                return None, None
+            width: float | None = None
+            height: float | None = None
+            panel_points = [nodes[n] for n in ways.get(panel_ref, []) if n in nodes]
+            if len(panel_points) >= 2:
+                width = calc_distance_3d(panel_points[0], panel_points[-1])
+            height_tag = _get_tag(panel_elem, "height")
+            if height_tag is not None:
+                try:
+                    height = float(height_tag)
+                except ValueError:
+                    pass
+            return width, height
+
+        bulbs: list[Point3D] = []
+        lamps: list[Lamp] = []
+        heads: list[SignalHead] = []
+        for member in rel_elem.findall("member"):
+            if member.get("role") != "light_bulbs":
+                continue
+            way_id = member.get("ref")
+            head_points: list[Point3D] = []
+            for node_id in ways.get(way_id, []):
+                point = nodes.get(node_id)
+                if point is None:
+                    continue
+                head_points.append(point)
+                bulbs.append(point)
+                node_elem = node_elems.get(node_id)
+                lamps.append(
+                    Lamp(
+                        pos=point,
+                        color=_get_tag(node_elem, "color") if node_elem is not None else None,
+                        arrow=_get_tag(node_elem, "arrow") if node_elem is not None else None,
+                    )
+                )
+            if head_points:
+                # this head's own panel via the bulb way's traffic_light_id
+                # back-reference; the relation's first refers as fallback
+                bulb_way_elem = way_elems.get(way_id)
+                head_panel_ref = _get_tag(bulb_way_elem, "traffic_light_id") if bulb_way_elem is not None else None
+                head_w, head_h = _panel_dims(head_panel_ref or refers_ref)
+                heads.append(SignalHead(pos=calc_centroid(head_points), panel_width=head_w, panel_height=head_h))
 
         if not bulbs:
             continue
@@ -209,18 +241,7 @@ def parse_traffic_lights(xml_string: str, nodes: dict[str, Point3D]) -> list[Tra
         # map every signal carries both (widths 1.04-1.34m for standard
         # horizontal vehicle housings, ~0.4m for pedestrian, and a handful
         # of 0.39x1.2m vertical snow-region vehicle signals).
-        panel_width: float | None = None
-        panel_height: float | None = None
-        if panel_elem is not None:
-            panel_points = [nodes[n] for n in ways.get(refers_ref, []) if n in nodes]
-            if len(panel_points) >= 2:
-                panel_width = calc_distance_3d(panel_points[0], panel_points[-1])
-            height_tag = _get_tag(panel_elem, "height")
-            if height_tag is not None:
-                try:
-                    panel_height = float(height_tag)
-                except ValueError:
-                    pass
+        panel_width, panel_height = _panel_dims(refers_ref)
 
         facing_yaw: float | None = None
         stop_line_pos: Point3D | None = None
@@ -245,6 +266,7 @@ def parse_traffic_lights(xml_string: str, nodes: dict[str, Point3D]) -> list[Tra
                 panel_width=panel_width,
                 panel_height=panel_height,
                 lamps=tuple(lamps),
+                heads=tuple(heads),
             )
         )
     return traffic_lights

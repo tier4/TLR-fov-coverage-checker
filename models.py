@@ -28,6 +28,20 @@ class Lamp:
 
 
 @dataclass(frozen=True)
+class SignalHead:
+    """One physical housing of a traffic light (one `light_bulbs` way):
+    its own bulb centroid and its own panel dimensions. A regulatory
+    element usually bundles several (2-4 on most of the bundled map), and
+    visibility is judged per head -- seeing any one head of a light is
+    seeing the light.
+    """
+
+    pos: Point3D  # centroid of this head's own bulbs
+    panel_width: float | None = None
+    panel_height: float | None = None
+
+
+@dataclass(frozen=True)
 class TrafficLight:
     id: str
     bulbs: list[Point3D]
@@ -38,6 +52,7 @@ class TrafficLight:
     panel_width: float | None = None  # [m] housing width: distance between the `refers` panel way's endpoints
     panel_height: float | None = None  # [m] housing height: the panel way's `height` tag
     lamps: tuple[Lamp, ...] = ()  # same bulbs as `bulbs`, with their color/arrow tags attached
+    heads: tuple[SignalHead, ...] = ()  # one per light_bulbs way; empty means "treat the bulb centroid as one head"
 
 
 @dataclass(frozen=True)
@@ -67,7 +82,9 @@ class ValidationResult:
     target_tl_id: str
     signal_type: str
     group_id: str
-    distance_m: float
-    in_fov: bool
-    facing_camera: bool
-    is_covered: bool  # in_fov and facing_camera
+    distance_m: float  # camera to the light's representative point (pooled bulb centroid)
+    in_fov: bool  # any head inside the FOV cone
+    facing_camera: bool  # readable orientation: equals is_covered while in_fov (see run_simulation)
+    is_covered: bool  # at least one head both in FOV and facing the camera
+    heads_total: int = 1
+    heads_visible: int = 0  # how many heads are individually in-FOV AND facing
