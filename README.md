@@ -171,6 +171,22 @@ Available settings (CLI flag / YAML key under `camera:`):
 | `--point-size` | `point_size` (top-level) | matplotlib marker area (`s=`) for each waypoint dot -- bump it up if points are too small to see | 6.0 |
 | `--map` | `map` (top-level) | path to the Lanelet2 `.osm` file | *(required)* |
 | `--output` | `output` (top-level) | output plot path | `fov_coverage_result.png` |
+| *(YAML only)* | `name` | camera label in output/UI | camera |
+| *(YAML only)* | `yaw_offset` | mounting direction relative to travel [deg, CCW+] | 0.0 |
+| *(YAML only)* | `pitch_offset` | mounting tilt [deg, up+] | 0.0 |
+
+**Multi-camera rigs:** replace the single `camera:` mapping with a
+`cameras:` list (see `camera_spec_multi.yaml` for a tele+wide example);
+each entry takes the same keys plus `name`/`yaw_offset`/`pitch_offset`.
+Coverage counts a light seen by *any* camera; redundancy counts every
+(camera, head) observation -- one head seen by two cameras is two
+independent observations, treating camera failure and head occlusion
+symmetrically. The viewer overlays each camera's frustum on the map and
+its FOV rectangle in the camera view (drawn in vehicle-heading angle
+space, so gaps and overlaps between cameras are directly visible), the
+candidate table gains a camera column, and the selected-point line shows
+per-camera totals. Per-camera CLI flags only apply to single-camera
+configs -- edit the YAML for a rig.
 
 The printed report breaks coverage down by signal type and by *why* a
 waypoint is uncovered (out of the camera's FOV vs. the signal facing away

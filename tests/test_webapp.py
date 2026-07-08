@@ -113,7 +113,7 @@ def client(tmp_path):
     map_file = tmp_path / "mock.osm"
     map_file.write_text(MOCK_XML, encoding="utf-8")
     # wide-open spec: the mock lane/light pair should always be a candidate
-    webapp._load_data(map_file, CameraSpec(min_range=0.0, max_range=1000.0), None)
+    webapp._load_data(map_file, [CameraSpec(min_range=0.0, max_range=1000.0)], None)
     webapp.app.config["TESTING"] = True
     with webapp.app.test_client() as c:
         yield c

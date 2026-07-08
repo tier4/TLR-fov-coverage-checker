@@ -778,3 +778,46 @@ have". Both are kept, as separate things:
   rides on a single head.
 - The point-info line reports both: "weakest group: k/n heads visible |
   redundancy: m". Snapshot format v9 (points carry min_heads_visible).
+
+## Multi-camera rigs
+
+Design chosen via discussion (both recommendations accepted):
+
+- **Counting: camera x head observations.** One ValidationResult per
+  (waypoint, light, camera) -- `camera_name` says which. Coverage is the
+  union (any camera seeing any head of a group counts); redundancy sums
+  every observation, so one head seen by two cameras is two -- camera
+  failure and head occlusion treated symmetrically. Nothing in the
+  aggregation functions changed for this: `compute_point_status` already
+  unions over is_covered, `compute_point_min_visible` already sums
+  heads_visible per group, and the camera dimension just rides along.
+- **One shared camera-view panel, not per-camera tabs**: everything is
+  drawn in the *vehicle-heading* angle space, where each camera's FOV
+  rectangle sits at its own mounting offset (center = yaw_offset/
+  pitch_offset). Overlaps and gaps between cameras are directly visible;
+  each light plots exactly once (per-camera candidate rows merge for
+  drawing: a head is solid if ANY camera sees it, the label totals
+  observations, e.g. "56m, 8 obs" for 4 heads x 2 cameras).
+
+Model/config: `CameraSpec` gains `name`, `yaw_offset` (mounting
+direction relative to travel, CCW+), `pitch_offset`. YAML `cameras:`
+list is the rig form; the single `camera:` mapping stays as the
+one-camera shorthand (both at once is rejected, duplicate names are
+rejected, unnamed entries get camera1/camera2/...). Per-camera CLI
+flags error out on a multi-camera config rather than silently applying
+to all. See camera_spec_multi.yaml for a worked tele+wide example.
+
+Simulation notes: the range prefilter runs per camera (a light can be a
+candidate for the tele but inside the wide's dead zone at the same
+waypoint -- then only the tele emits a result there, and the wide
+implicitly contributes zero observations); the ahead-check stays judged
+against the direction of travel, not the camera axis ("already passed"
+is a route property, a side camera doesn't change it); the
+successor-walk bound in `_build_lane_relevant_tl_ids` uses the rig's
+longest max_range.
+
+Verified on the bundled map with tele (30x17deg, 20-250m) + wide
+(90x50deg, 3-80m): front_tele alone reproduces the single-camera run
+exactly (76.2% -- consistency check), wide alone covers 88.7% of its
+shorter-range candidate set, combined coverage 79.4%, and redundancy 3+
+rises from 34.0% to 45.8%. Snapshot format v10.

@@ -65,7 +65,15 @@ class LanePath:
 
 @dataclass(frozen=True)
 class CameraSpec:
-    """A candidate camera configuration to validate against the map."""
+    """One camera of the rig being validated against the map.
+
+    `yaw_offset`/`pitch_offset` are the mounting orientation relative to
+    the vehicle: the camera's optical axis points at
+    (lane heading + yaw_offset, pitch_offset). 0/0 is the classic
+    forward-looking camera. Lateral mounting position on the vehicle is
+    deliberately not modeled -- centimeters against detection ranges of
+    tens/hundreds of meters.
+    """
 
     height: float = 3.0
     fov_h: float = 30.0
@@ -73,6 +81,9 @@ class CameraSpec:
     min_range: float = 50.0
     max_range: float = 200.0
     facing_tolerance_deg: float = 45.0
+    name: str = "camera"
+    yaw_offset: float = 0.0  # [deg] CCW-positive, relative to direction of travel
+    pitch_offset: float = 0.0  # [deg] up-positive
 
 
 @dataclass(frozen=True)
@@ -88,3 +99,4 @@ class ValidationResult:
     is_covered: bool  # at least one head both in FOV and facing the camera
     heads_total: int = 1
     heads_visible: int = 0  # how many heads are individually in-FOV AND facing
+    camera_name: str = "camera"  # which camera of the rig this result is for (one result per camera per candidate)

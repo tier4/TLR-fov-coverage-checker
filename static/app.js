@@ -66,7 +66,13 @@ let points = [];
 let trafficLights = [];
 let selectedPointId = null;
 let currentDetail = null;
-let cameraSpec = null;
+let cameraSpec = null; // first camera of the rig (shared-frame reference)
+let metaCameras = []; // every camera: name/fov/range/yaw_offset/pitch_offset
+
+// per-camera accent colors for frustums and FOV rectangles; deliberately
+// avoids the status palette (green/orange/red) so the two never collide
+const CAMERA_COLORS = ["#1f77b4", "#e377c2", "#17becf", "#9467bd", "#8c564b"];
+const cameraColor = (i) => CAMERA_COLORS[i % CAMERA_COLORS.length];
 // {lat: [a,b,c], lon: [d,e,f]} affine fit from /api/meta, or null if the
 // map's nodes carried no lat/lon attributes
 let latlonTransform = null;
@@ -295,9 +301,17 @@ function drawLightMarker(ctx, sx, sy, r, facingYawDeg, fillColor, strokeColor, s
   ctx.stroke();
 }
 
-function drawFrustum(ctx, point, camYawDeg, fovHDeg, minRange, maxRange) {
-  const yaw = (camYawDeg * Math.PI) / 180;
-  const half = (fovHDeg / 2) * (Math.PI / 180);
+// hex "#rrggbb" -> "rgba(r,g,b,alpha)"
+function withAlpha(hex, alpha) {
+  const r = parseInt(hex.slice(1, 3), 16), g = parseInt(hex.slice(3, 5), 16), b = parseInt(hex.slice(5, 7), 16);
+  return `rgba(${r}, ${g}, ${b}, ${alpha})`;
+}
+
+// One camera's frustum: heading is the direction of travel, the camera's
+// own axis adds its mounting yaw_offset.
+function drawFrustum(ctx, point, headingDeg, cam, color) {
+  const yaw = ((headingDeg + (cam.yaw_offset || 0)) * Math.PI) / 180;
+  const half = (cam.fov_h / 2) * (Math.PI / 180);
   const a0 = yaw - half, a1 = yaw + half;
 
   const atAngle = (angle, dist) => worldToScreen(point.x + dist * Math.cos(angle), point.y + dist * Math.sin(angle));
@@ -306,8 +320,8 @@ function drawFrustum(ctx, point, camYawDeg, fovHDeg, minRange, maxRange) {
   const outerPts = [], innerPts = [];
   for (let i = 0; i <= steps; i++) {
     const a = a0 + ((a1 - a0) * i) / steps;
-    outerPts.push(atAngle(a, maxRange));
-    innerPts.push(atAngle(a, minRange));
+    outerPts.push(atAngle(a, cam.max_range));
+    innerPts.push(atAngle(a, cam.min_range));
   }
 
   ctx.save();
@@ -316,22 +330,29 @@ function drawFrustum(ctx, point, camYawDeg, fovHDeg, minRange, maxRange) {
   for (const [x, y] of outerPts.slice(1)) ctx.lineTo(x, y);
   for (const [x, y] of innerPts.reverse()) ctx.lineTo(x, y);
   ctx.closePath();
-  ctx.fillStyle = "rgba(31, 119, 180, 0.15)";
+  ctx.fillStyle = withAlpha(color, 0.12);
   ctx.fill();
-  ctx.strokeStyle = "rgba(31, 119, 180, 0.8)";
+  ctx.strokeStyle = withAlpha(color, 0.8);
   ctx.lineWidth = 1.5;
   ctx.stroke();
 
-  // dashed heading line down the middle of the frustum, the direction of travel
+  // dashed axis line down the middle of the frustum
   const [sx, sy] = worldToScreen(point.x, point.y);
-  const [hx, hy] = atAngle(yaw, maxRange);
+  const [hx, hy] = atAngle(yaw, cam.max_range);
   ctx.beginPath();
   ctx.moveTo(sx, sy);
   ctx.lineTo(hx, hy);
   ctx.setLineDash([5, 4]);
-  ctx.strokeStyle = "rgba(31, 119, 180, 0.9)";
+  ctx.strokeStyle = withAlpha(color, 0.9);
   ctx.lineWidth = 1;
   ctx.stroke();
+
+  // camera name at the outer edge of the axis, so overlapping frustums
+  // stay attributable
+  ctx.setLineDash([]);
+  ctx.fillStyle = withAlpha(color, 0.95);
+  ctx.font = "11px sans-serif";
+  ctx.fillText(cam.name, hx + 4, hy - 4);
   ctx.restore();
 }
 
@@ -400,14 +421,9 @@ function renderMap() {
 // everything drawn above the waypoint dots, shared by both color modes:
 // frustum, light markers, pattern rings, selection ring
 function drawMapOverlays(ctx, dotSize) {
-  if (selectedPointId !== null && currentDetail && cameraSpec) {
-    drawFrustum(
-      ctx,
-      points[selectedPointId],
-      currentDetail.cam_yaw,
-      cameraSpec.fov_h,
-      cameraSpec.min_range,
-      cameraSpec.max_range
+  if (selectedPointId !== null && currentDetail && metaCameras.length) {
+    metaCameras.forEach((cam, i) =>
+      drawFrustum(ctx, points[selectedPointId], currentDetail.cam_yaw, cam, cameraColor(i))
     );
   }
 
@@ -539,11 +555,21 @@ function renderPointInfo(detail) {
   const headsNote = sel && sel.heads_total > 0
     ? `  |  weakest group: ${sel.heads_visible}/${sel.heads_total} heads visible  |  redundancy: ${sel.min_heads_visible ?? "?"}`
     : "";
+  // per-camera visible-head totals across all candidates at this point
+  let perCameraNote = "";
+  if (metaCameras.length > 1) {
+    const byCam = new Map(metaCameras.map((c) => [c.name, 0]));
+    for (const c of detail.candidates) {
+      if (byCam.has(c.camera_name)) byCam.set(c.camera_name, byCam.get(c.camera_name) + c.heads_visible);
+    }
+    perCameraNote = "  |  " + [...byCam.entries()].map(([name, n]) => `${name}: ${n}`).join("  ");
+  }
+  const lightCount = new Set(detail.candidates.map((c) => c.target_tl_id)).size;
   pointInfoEl.textContent =
     `lane ${p.lane_id} @ (${p.x.toFixed(1)}, ${p.y.toFixed(1)})  |  ` +
     `cam_yaw=${detail.cam_yaw.toFixed(1)}deg  |  ` +
-    `FOV ${detail.fov_h}x${detail.fov_v} deg  |  ${detail.candidates.length} candidate(s)  |  ` +
-    `status=${detail.status}${headsNote}`;
+    `${lightCount} candidate light(s)  |  ` +
+    `status=${detail.status}${perCameraNote}${headsNote}`;
 
   const ll = worldToLatLon(p.x, p.y);
   if (ll) {
@@ -571,6 +597,7 @@ function renderCandidateTable(detail) {
       return td;
     };
     tr.appendChild(cell(c.target_tl_id));
+    tr.appendChild(cell(c.camera_name || "-"));
     tr.appendChild(cell(c.signal_type));
     tr.appendChild(cell(c.distance_m.toFixed(1)));
     tr.appendChild(cell(c.yaw_diff.toFixed(1)));
@@ -596,12 +623,20 @@ function renderFrame(detail) {
 
   const w = frameCanvas.width, h = frameCanvas.height;
   const cx = w / 2 + frameView.panX, cy = h / 2 + frameView.panY;
-  const halfH = detail.fov_h / 2, halfV = detail.fov_v / 2;
 
-  // Work in degrees with one shared px/deg scale on both axes, so the FOV
-  // rectangle keeps its true aspect ratio (e.g. 30x17 renders wide, not
-  // square the way the old +-1-normalized rendering did).
-  let rangeX = halfH, rangeY = halfV;
+  // The shared frame is the *vehicle-heading* angle space: every camera's
+  // FOV rectangle sits at its own mounting offset (center = yaw_offset/
+  // pitch_offset), so overlaps and gaps between cameras are directly
+  // visible, and every light plots exactly once.
+  const rig = metaCameras.length ? metaCameras : [{ name: "camera", fov_h: detail.fov_h, fov_v: detail.fov_v, yaw_offset: 0, pitch_offset: 0 }];
+
+  // one shared px/deg scale on both axes, so every FOV rectangle keeps
+  // its true aspect ratio; auto-fit covers all rects plus all candidates
+  let rangeX = 1, rangeY = 1;
+  for (const cam of rig) {
+    rangeX = Math.max(rangeX, Math.abs(cam.yaw_offset || 0) + cam.fov_h / 2);
+    rangeY = Math.max(rangeY, Math.abs(cam.pitch_offset || 0) + cam.fov_v / 2);
+  }
   for (const c of detail.candidates) {
     rangeX = Math.max(rangeX, Math.abs(c.yaw_diff));
     rangeY = Math.max(rangeY, Math.abs(c.pitch_diff));
@@ -609,14 +644,13 @@ function renderFrame(detail) {
   const pad = 1.2;
   const pxPerDeg = Math.min(w / (2 * rangeX * pad), h / (2 * rangeY * pad)) * frameView.zoom;
 
-  // This is a view *through the camera*, out the windshield: yaw_diff is
-  // CCW-positive (a target left of the heading has positive yaw_diff), so
-  // positive must render toward the LEFT edge -- hence the minus sign.
-  // Positive pitch_diff (above the horizon) renders up.
+  // This is a view *through the windshield*: yaw_diff is CCW-positive (a
+  // target left of the heading has positive yaw_diff), so positive must
+  // render toward the LEFT edge -- hence the minus sign. Positive
+  // pitch_diff (above the horizon) renders up.
   const toScreen = (yawDeg, pitchDeg) => [cx - yawDeg * pxPerDeg, cy - pitchDeg * pxPerDeg];
 
-  // horizon: the camera is level (pitch 0), so eye-height (z = ground +
-  // cam height) maps to a full-width line through pitch_diff = 0.
+  // horizon: pitch_diff = 0 (eye height, level) as a full-width line
   ctx.strokeStyle = "#3a5a8a";
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -626,15 +660,24 @@ function renderFrame(detail) {
   ctx.font = "10px sans-serif";
   ctx.fillText("horizon (pitch 0)", 6, cy - 4);
 
-  // FOV rectangle: +-fov_h/2 wide, +-fov_v/2 tall
-  const [rx0, ry0] = toScreen(halfH, halfV);
-  const [rx1, ry1] = toScreen(-halfH, -halfV);
-  ctx.strokeStyle = "#888";
-  ctx.setLineDash([6, 4]);
-  ctx.strokeRect(rx0, ry0, rx1 - rx0, ry1 - ry0);
-  ctx.setLineDash([]);
+  // one FOV rectangle per camera, centered at its mounting offsets
+  let leftEdgeX = Infinity, rightEdgeX = -Infinity;
+  rig.forEach((cam, i) => {
+    const yawOff = cam.yaw_offset || 0, pitchOff = cam.pitch_offset || 0;
+    const [rx0, ry0] = toScreen(yawOff + cam.fov_h / 2, pitchOff + cam.fov_v / 2);
+    const [rx1, ry1] = toScreen(yawOff - cam.fov_h / 2, pitchOff - cam.fov_v / 2);
+    leftEdgeX = Math.min(leftEdgeX, rx0); rightEdgeX = Math.max(rightEdgeX, rx1);
+    const color = metaCameras.length ? cameraColor(i) : "#888";
+    ctx.strokeStyle = color;
+    ctx.setLineDash([6, 4]);
+    ctx.strokeRect(rx0, ry0, rx1 - rx0, ry1 - ry0);
+    ctx.setLineDash([]);
+    ctx.fillStyle = color;
+    ctx.font = "10px sans-serif";
+    ctx.fillText(cam.name, rx0 + 4, ry0 + 12);
+  });
 
-  // crosshair at dead center
+  // crosshair at dead ahead (vehicle heading), not any camera's axis
   ctx.strokeStyle = "#555";
   ctx.lineWidth = 1;
   ctx.beginPath();
@@ -644,18 +687,32 @@ function renderFrame(detail) {
 
   ctx.fillStyle = "#aaa";
   ctx.font = "10px sans-serif";
-  ctx.fillText("FOV edge", rx0 + 4, ry0 + 12);
   // orientation labels so left/right is never ambiguous
-  ctx.fillText("L", rx0 + 4, cy - 6);
-  ctx.fillText("R", rx1 - 12, cy - 6);
+  ctx.fillText("L", leftEdgeX + 4, cy - 6);
+  ctx.fillText("R", rightEdgeX - 12, cy - 6);
 
-  // Farthest first, so when two lights overlap in the image the nearer
-  // (bigger-looking) one paints on top -- same occlusion order a camera
-  // would see.
-  const byDistanceDesc = [...detail.candidates].sort((p, q) => q.distance_m - p.distance_m);
+  // One drawing entry per light: its per-camera candidate rows merge, a
+  // head drawing solid if ANY camera sees it, and the label totalling
+  // observations across cameras. Farthest first, so when two lights
+  // overlap the nearer (bigger-looking) one paints on top -- same
+  // occlusion order a camera would see.
+  const byLight = new Map();
+  for (const c of detail.candidates) {
+    let entry = byLight.get(c.target_tl_id);
+    if (!entry) {
+      entry = { ...c, heads: c.heads.map((hd) => ({ ...hd })), sum_visible: 0, any_covered: false, any_in_fov: false };
+      byLight.set(c.target_tl_id, entry);
+    } else {
+      c.heads.forEach((hd, k) => { if (entry.heads[k]) entry.heads[k].visible = entry.heads[k].visible || hd.visible; });
+    }
+    entry.sum_visible += c.heads_visible;
+    entry.any_covered = entry.any_covered || c.is_covered;
+    entry.any_in_fov = entry.any_in_fov || c.in_fov;
+  }
+  const byDistanceDesc = [...byLight.values()].sort((p, q) => q.distance_m - p.distance_m);
   for (const c of byDistanceDesc) {
     const [sx, sy] = toScreen(c.yaw_diff, c.pitch_diff);
-    const color = c.is_covered ? STATUS_COLOR.covered : c.in_fov ? STATUS_COLOR.facing_away : STATUS_COLOR.out_of_fov;
+    const color = c.any_covered ? STATUS_COLOR.covered : c.any_in_fov ? STATUS_COLOR.facing_away : STATUS_COLOR.out_of_fov;
 
     // One box per physical housing, each at its own projected position
     // and its own mapped size -- not one box at the pooled centroid,
@@ -716,7 +773,11 @@ function renderFrame(detail) {
 
     ctx.fillStyle = "white";
     ctx.font = "10px sans-serif";
-    const headsNote = c.heads_total > 1 ? `, ${c.heads_visible}/${c.heads_total} heads` : "";
+    // multi-camera: total observations across the rig; single camera:
+    // the familiar k/n heads
+    const headsNote = metaCameras.length > 1
+      ? `, ${c.sum_visible} obs`
+      : c.heads_total > 1 ? `, ${c.heads_visible}/${c.heads_total} heads` : "";
     ctx.fillText(
       `${c.target_tl_id} (${c.distance_m.toFixed(0)}m${headsNote})`,
       sx + Math.max(8, rw / 2 + 4),
@@ -972,13 +1033,19 @@ async function main() {
     const meta = await metaRes.json();
     points = await pointsRes.json();
     trafficLights = await lightsRes.json();
-    cameraSpec = meta.camera;
+    metaCameras = meta.cameras;
+    cameraSpec = meta.cameras[0];
     latlonTransform = meta.latlon_transform;
 
+    const camsText = meta.cameras
+      .map((c) => {
+        const offset = c.yaw_offset ? ` yaw${c.yaw_offset > 0 ? "+" : ""}${c.yaw_offset}deg` : "";
+        return `${c.name}: ${c.fov_h}x${c.fov_v}deg [${c.min_range},${c.max_range}]m${offset}`;
+      })
+      .join(" | ");
     metaEl.textContent =
       `${meta.lane_count} lanes | ${meta.traffic_light_count} traffic lights | ${meta.point_count} evaluated waypoints | ` +
-      `camera: height=${meta.camera.height}m fov=${meta.camera.fov_h}x${meta.camera.fov_v}deg ` +
-      `range=[${meta.camera.min_range},${meta.camera.max_range}]m facing_tolerance=${meta.camera.facing_tolerance_deg}deg`;
+      camsText;
 
     resizeCanvases();
     fitViewToData();

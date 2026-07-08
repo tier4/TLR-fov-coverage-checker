@@ -56,3 +56,39 @@ def test_load_config_unknown_camera_key_raises():
 def test_load_config_invalid_signal_type_raises():
     with pytest.raises(ValueError, match="Invalid signal_type"):
         load_config("signal_type: bicycle\n")
+
+
+def test_load_config_cameras_list():
+    yaml_text = """
+    cameras:
+      - name: front_tele
+        fov_h: 30.0
+        max_range: 250.0
+      - name: front_wide
+        fov_h: 90.0
+        max_range: 80.0
+        yaw_offset: -10.0
+    """
+    config = load_config(yaml_text)
+    assert len(config.cameras) == 2
+    assert config.cameras[0].name == "front_tele"
+    assert config.cameras[0].fov_h == 30.0
+    assert config.cameras[1].name == "front_wide"
+    assert config.cameras[1].yaw_offset == -10.0
+    # `camera` stays as the first-camera shorthand
+    assert config.camera is config.cameras[0]
+
+
+def test_load_config_cameras_get_default_names():
+    config = load_config("cameras:\n  - fov_h: 30.0\n  - fov_h: 90.0\n")
+    assert [c.name for c in config.cameras] == ["camera1", "camera2"]
+
+
+def test_load_config_rejects_both_camera_and_cameras():
+    with pytest.raises(ValueError, match="both"):
+        load_config("camera:\n  fov_h: 30.0\ncameras:\n  - fov_h: 90.0\n")
+
+
+def test_load_config_rejects_duplicate_camera_names():
+    with pytest.raises(ValueError, match="Duplicate camera name"):
+        load_config("cameras:\n  - name: cam\n  - name: cam\n")

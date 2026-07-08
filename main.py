@@ -103,7 +103,10 @@ def main() -> None:
         "max_range": args.max_range,
         "facing_tolerance_deg": args.facing_tolerance,
     }
-    camera = replace(config.camera, **{k: v for k, v in camera_overrides.items() if v is not None})
+    active_overrides = {k: v for k, v in camera_overrides.items() if v is not None}
+    if active_overrides and len(config.cameras) > 1:
+        parser.error("per-camera CLI flags don't apply to a multi-camera `cameras:` config -- edit the YAML instead")
+    cameras = [replace(config.camera, **active_overrides)] if len(config.cameras) == 1 else list(config.cameras)
 
     signal_type = args.signal_type or config.signal_type
     signal_types = None if signal_type == "both" else {signal_type}
@@ -125,19 +128,24 @@ def main() -> None:
     by_type = {t: sum(1 for tl in traffic_lights if tl.signal_type == t) for t in ("vehicle", "pedestrian", "unknown")}
     print(f"Parsed {len(nodes)} nodes, {len(lanes)} lanes, {len(traffic_lights)} traffic lights ({t1 - t0:.1f}s)")
     print(f"  by signal_type: {by_type}")
-    print(
-        f"Camera spec: height={camera.height}m fov=({camera.fov_h}x{camera.fov_v})deg "
-        f"range=[{camera.min_range},{camera.max_range}]m facing_tolerance={camera.facing_tolerance_deg}deg "
-        f"target_signal_type={signal_type}"
-    )
+    for cam in cameras:
+        print(
+            f"Camera '{cam.name}': height={cam.height}m fov=({cam.fov_h}x{cam.fov_v})deg "
+            f"range=[{cam.min_range},{cam.max_range}]m yaw_offset={cam.yaw_offset}deg "
+            f"pitch_offset={cam.pitch_offset}deg facing_tolerance={cam.facing_tolerance_deg}deg "
+            f"target_signal_type={signal_type}"
+        )
 
-    results = run_simulation(lanes, traffic_lights, camera=camera, signal_types=signal_types)
+    results = run_simulation(lanes, traffic_lights, cameras=cameras, signal_types=signal_types)
     t2 = time.perf_counter()
-    print(f"Evaluated {len(results)} waypoint/traffic-light candidates within range ({t2 - t1:.1f}s)")
+    print(f"Evaluated {len(results)} waypoint/light/camera candidates within range ({t2 - t1:.1f}s)")
 
-    _print_breakdown("overall", results)
+    _print_breakdown("overall (all cameras)", results)
     for st in ("vehicle", "pedestrian"):
         _print_breakdown(st, [r for r in results if r.signal_type == st])
+    if len(cameras) > 1:
+        for cam in cameras:
+            _print_breakdown(f"{cam.name} alone", [r for r in results if r.camera_name == cam.name])
 
     if results:
         by_point = _group_by_point(results)

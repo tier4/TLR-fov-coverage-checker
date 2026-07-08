@@ -184,18 +184,28 @@ def run_simulation(
     traffic_lights: list[TrafficLight],
     camera: CameraSpec = CameraSpec(),
     signal_types: set[str] | None = None,
+    cameras: list[CameraSpec] | None = None,
 ) -> list[ValidationResult]:
-    """Scan every lane's center line at 1m intervals and check whether `camera`
-    can detect nearby traffic lights.
+    """Scan every lane's center line at 1m intervals and check whether the
+    camera rig can detect nearby traffic lights.
 
-    For each waypoint: the camera sits `camera.height` above it, looks
-    toward the next waypoint (pitch fixed at 0.0). It is checked against
-    every traffic light (optionally restricted to `signal_types`, e.g.
-    {"vehicle"}) whose representative position (bulb centroid) is within
-    [camera.min_range, camera.max_range] AND that hasn't already been
-    passed along the route (see `check_target_ahead`; a light more than 90
-    degrees off the direction of travel is behind the vehicle, which isn't
-    a meaningful camera-spec gap).
+    Pass `cameras` for a multi-camera rig; the single `camera` parameter
+    stays as the one-camera shorthand (ignored when `cameras` is given).
+    One ValidationResult is emitted per (waypoint, light, camera) --
+    `camera_name` says which -- so downstream aggregation can both union
+    them (coverage: any camera seeing any head of a group counts) and sum
+    them (redundancy: the same head seen by two cameras is two
+    independent observations, treating camera failure and head occlusion
+    symmetrically).
+
+    For each waypoint: a camera sits `height` above it, its optical axis
+    at (lane heading + `yaw_offset`, `pitch_offset`). Each light
+    (optionally restricted to `signal_types`, e.g. {"vehicle"}) is a
+    candidate for that camera when its representative position (bulb
+    centroid) is within [min_range, max_range] of it AND hasn't already
+    been passed along the route (see `check_target_ahead`, judged against
+    the direction of travel, not the camera axis; a light behind the
+    vehicle isn't a meaningful camera-spec gap regardless of mounting).
 
     On top of that range/ahead filter, a vehicle-signal candidate must
     also be relevant to this specific lane. Where the map itself says so
@@ -219,7 +229,8 @@ def run_simulation(
     within `camera.facing_tolerance_deg` (lights with unknown facing_yaw
     are never excluded by the facing check).
     """
-    if not lanes or not traffic_lights:
+    rig = list(cameras) if cameras is not None else [camera]
+    if not lanes or not traffic_lights or not rig:
         return []
 
     if signal_types is not None:
@@ -242,7 +253,9 @@ def run_simulation(
         return []
     tl_xyz = np.array([[p.x, p.y, p.z] for _, _, _, _, p, _ in tl_targets], dtype=float)
 
-    lane_relevant_tl_ids = _build_lane_relevant_tl_ids(lanes, traffic_lights, camera.max_range)
+    # the successor-walk range bound must reach as far as the longest-range
+    # camera of the rig can see
+    lane_relevant_tl_ids = _build_lane_relevant_tl_ids(lanes, traffic_lights, max(c.max_range for c in rig))
 
     results: list[ValidationResult] = []
 
@@ -252,100 +265,114 @@ def run_simulation(
             continue
 
         lane_tl_ids = lane_relevant_tl_ids.get(lane.id)
-        cam_positions = [Point3D(p.x, p.y, p.z + camera.height) for p in sampled]
-        cam_xyz = np.array([[p.x, p.y, p.z] for p in cam_positions], dtype=float)
+        base_xyz = np.array([[p.x, p.y, p.z] for p in sampled], dtype=float)
 
-        diff = cam_xyz[:, None, :] - tl_xyz[None, :, :]
-        dist = np.sqrt(np.sum(diff**2, axis=-1))
-        candidate_i, candidate_j = np.where((dist >= camera.min_range) & (dist <= camera.max_range))
-        if candidate_i.size == 0:
-            continue
-
+        # lane heading per waypoint (direction of travel) is shared by every
+        # camera of the rig; each camera's optical axis adds its yaw_offset
         yaw_cache: dict[int, float] = {}
         last_idx = len(sampled) - 1
-        for i, j in zip(candidate_i.tolist(), candidate_j.tolist()):
+
+        def lane_heading(i: int) -> float:
             if i not in yaw_cache:
                 if i < last_idx:
                     yaw_cache[i] = calc_heading_yaw(sampled[i], sampled[i + 1])
                 else:
                     yaw_cache[i] = calc_heading_yaw(sampled[i - 1], sampled[i])
+            return yaw_cache[i]
 
-            tl_id, signal_type, group_id, facing_yaw, tl_pos, head_positions = tl_targets[j]
-            cam_pos = cam_positions[i]
+        for cam in rig:
+            cam_positions = [Point3D(p.x, p.y, p.z + cam.height) for p in sampled]
+            cam_xyz = base_xyz + np.array([0.0, 0.0, cam.height])
 
-            if signal_type == "vehicle" and lane_tl_ids is not None:
-                if tl_id not in lane_tl_ids:
+            diff = cam_xyz[:, None, :] - tl_xyz[None, :, :]
+            dist = np.sqrt(np.sum(diff**2, axis=-1))
+            candidate_i, candidate_j = np.where((dist >= cam.min_range) & (dist <= cam.max_range))
+            if candidate_i.size == 0:
+                continue
+
+            for i, j in zip(candidate_i.tolist(), candidate_j.tolist()):
+                heading = lane_heading(i)
+                tl_id, signal_type, group_id, facing_yaw, tl_pos, head_positions = tl_targets[j]
+                cam_pos = cam_positions[i]
+
+                if signal_type == "vehicle" and lane_tl_ids is not None:
+                    if tl_id not in lane_tl_ids:
+                        continue
+                elif facing_yaw is not None and not check_light_relevant_to_lane(
+                    tl_facing_yaw=facing_yaw,
+                    lane_heading=heading,
+                    threshold_deg=LANE_DIRECTION_THRESHOLD_DEG,
+                ):
                     continue
-            elif facing_yaw is not None and not check_light_relevant_to_lane(
-                tl_facing_yaw=facing_yaw,
-                lane_heading=yaw_cache[i],
-                threshold_deg=LANE_DIRECTION_THRESHOLD_DEG,
-            ):
-                continue
 
-            if not check_target_ahead(
-                cam_pos=cam_pos,
-                cam_yaw=yaw_cache[i],
-                target_pos=tl_pos,
-                max_angle_diff=AHEAD_THRESHOLD_DEG,
-            ):
-                continue
-
-            # Judged per physical head, not at the pooled centroid: a
-            # regulatory element often bundles 2-4 housings meters apart,
-            # and the centroid can sit where no housing exists (in-FOV
-            # judged there was measurably wrong at FOV edges). Seeing any
-            # one head is seeing the light; heads_visible/heads_total keep
-            # the finer "how many of them" grading for display.
-            heads_visible = 0
-            any_head_in_fov = False
-            any_head_facing = False
-            for head_pos in head_positions:
-                head_in_fov = check_fov_inclusion(
+                # judged against the direction of travel, not the camera
+                # axis: "already passed" is a route property
+                if not check_target_ahead(
                     cam_pos=cam_pos,
-                    cam_yaw=yaw_cache[i],
-                    cam_pitch=0.0,
-                    target_pos=head_pos,
-                    fov_h=camera.fov_h,
-                    fov_v=camera.fov_v,
-                )
-                head_facing = (
-                    True
-                    if facing_yaw is None
-                    else check_light_facing_camera(
-                        tl_pos=head_pos,
-                        tl_facing_yaw=facing_yaw,
+                    cam_yaw=heading,
+                    target_pos=tl_pos,
+                    max_angle_diff=AHEAD_THRESHOLD_DEG,
+                ):
+                    continue
+
+                # Judged per physical head, not at the pooled centroid: a
+                # regulatory element often bundles 2-4 housings meters
+                # apart, and the centroid can sit where no housing exists
+                # (in-FOV judged there was measurably wrong at FOV edges).
+                # Seeing any one head is seeing the light;
+                # heads_visible/heads_total keep the finer "how many of
+                # them" grading for display.
+                cam_axis_yaw = heading + cam.yaw_offset
+                heads_visible = 0
+                any_head_in_fov = False
+                any_head_facing = False
+                for head_pos in head_positions:
+                    head_in_fov = check_fov_inclusion(
                         cam_pos=cam_pos,
-                        max_angle_diff=camera.facing_tolerance_deg,
+                        cam_yaw=cam_axis_yaw,
+                        cam_pitch=cam.pitch_offset,
+                        target_pos=head_pos,
+                        fov_h=cam.fov_h,
+                        fov_v=cam.fov_v,
+                    )
+                    head_facing = (
+                        True
+                        if facing_yaw is None
+                        else check_light_facing_camera(
+                            tl_pos=head_pos,
+                            tl_facing_yaw=facing_yaw,
+                            cam_pos=cam_pos,
+                            max_angle_diff=cam.facing_tolerance_deg,
+                        )
+                    )
+                    any_head_in_fov = any_head_in_fov or head_in_fov
+                    any_head_facing = any_head_facing or head_facing
+                    if head_in_fov and head_facing:
+                        heads_visible += 1
+
+                is_covered = heads_visible >= 1
+                # facing_camera keeps its role in status classification
+                # (in_fov and not facing_camera => "facing_away"): while
+                # any head is in FOV it answers "was the light readable
+                # there"; out of FOV it stays purely informational.
+                facing_camera = is_covered if any_head_in_fov else any_head_facing
+
+                results.append(
+                    ValidationResult(
+                        lane_id=lane.id,
+                        point=sampled[i],
+                        target_tl_id=tl_id,
+                        signal_type=signal_type,
+                        group_id=group_id,
+                        distance_m=float(dist[i, j]),
+                        in_fov=any_head_in_fov,
+                        facing_camera=facing_camera,
+                        is_covered=is_covered,
+                        heads_total=len(head_positions),
+                        heads_visible=heads_visible,
+                        camera_name=cam.name,
                     )
                 )
-                any_head_in_fov = any_head_in_fov or head_in_fov
-                any_head_facing = any_head_facing or head_facing
-                if head_in_fov and head_facing:
-                    heads_visible += 1
-
-            is_covered = heads_visible >= 1
-            # facing_camera keeps its role in status classification
-            # (in_fov and not facing_camera => "facing_away"): while any
-            # head is in FOV it answers "was the light readable there";
-            # out of FOV it stays purely informational.
-            facing_camera = is_covered if any_head_in_fov else any_head_facing
-
-            results.append(
-                ValidationResult(
-                    lane_id=lane.id,
-                    point=sampled[i],
-                    target_tl_id=tl_id,
-                    signal_type=signal_type,
-                    group_id=group_id,
-                    distance_m=float(dist[i, j]),
-                    in_fov=any_head_in_fov,
-                    facing_camera=facing_camera,
-                    is_covered=is_covered,
-                    heads_total=len(head_positions),
-                    heads_visible=heads_visible,
-                )
-            )
 
     return results
 

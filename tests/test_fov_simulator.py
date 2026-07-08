@@ -382,3 +382,44 @@ def test_compute_point_min_visible_zero_when_any_group_blind():
 
 def test_compute_point_min_visible_empty():
     assert compute_point_min_visible([]) == 0
+
+
+def test_run_simulation_multi_camera_emits_per_camera_results():
+    light = TrafficLight(id="ahead", bulbs=[Point3D(100.0, 0.0, 5.0)], signal_type="vehicle", facing_yaw=180.0)
+    tele = CameraSpec(name="tele", fov_h=30.0, min_range=50.0, max_range=200.0)
+    wide = CameraSpec(name="wide", fov_h=90.0, min_range=5.0, max_range=80.0)
+    results = run_simulation([STRAIGHT_LANE], [light], cameras=[tele, wide])
+
+    names = {r.camera_name for r in results}
+    assert names == {"tele", "wide"}
+    # range prefilter is per camera: only tele reaches the light from x=0
+    # (100m > wide's 80m max), only wide sees it from x=60 (~40m, inside
+    # tele's 50m min_range)
+    at_origin = {r.camera_name for r in results if r.point.x == 0.0}
+    assert at_origin == {"tele"}
+    at_60 = {r.camera_name for r in results if r.point.x == 60.0}
+    assert at_60 == {"wide"}
+
+
+def test_run_simulation_multi_camera_sums_into_redundancy():
+    # both cameras cover the light at x=60 (40m away: within tele's
+    # [30,200] and wide's [5,80]) -> two independent observations of the
+    # same single head
+    light = TrafficLight(id="ahead", bulbs=[Point3D(100.0, 0.0, 5.0)], signal_type="vehicle", facing_yaw=180.0)
+    tele = CameraSpec(name="tele", fov_h=30.0, min_range=30.0, max_range=200.0)
+    wide = CameraSpec(name="wide", fov_h=90.0, min_range=5.0, max_range=80.0)
+    results = run_simulation([STRAIGHT_LANE], [light], cameras=[tele, wide])
+    at_60 = [r for r in results if r.point.x == 60.0]
+    assert len(at_60) == 2
+    assert all(r.is_covered for r in at_60)
+    assert compute_point_min_visible(at_60) == 2  # camera redundancy counted
+
+
+def test_run_simulation_yaw_offset_rotates_the_fov():
+    # light dead ahead; a camera mounted 90deg to the left can't see it,
+    # even though it's in range
+    light = TrafficLight(id="ahead", bulbs=[Point3D(100.0, 0.0, 5.0)], signal_type="vehicle", facing_yaw=180.0)
+    side = CameraSpec(name="side", fov_h=30.0, min_range=50.0, max_range=200.0, yaw_offset=90.0)
+    results = run_simulation([STRAIGHT_LANE], [light], cameras=[side])
+    assert results
+    assert all(not r.is_covered and not r.in_fov for r in results)

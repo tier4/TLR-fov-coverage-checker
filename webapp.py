@@ -53,7 +53,23 @@ app = Flask(__name__, static_folder=str(STATIC_DIR), static_url_path="")
 # Populated once by _load_data() or _deserialize_state() before the server
 # starts serving requests.
 _state: dict = {}
-_SNAPSHOT_FORMAT_VERSION = 9  # bumped when min_heads_visible (redundancy) was added to points
+_SNAPSHOT_FORMAT_VERSION = 10  # bumped for multi-camera rigs (cameras list, per-result camera_name)
+
+_CAMERA_FIELDS = (
+    "height",
+    "fov_h",
+    "fov_v",
+    "min_range",
+    "max_range",
+    "facing_tolerance_deg",
+    "name",
+    "yaw_offset",
+    "pitch_offset",
+)
+
+
+def _camera_dict(cam: CameraSpec) -> dict:
+    return {f: getattr(cam, f) for f in _CAMERA_FIELDS}
 
 
 def _build_lane_yaw_lookup(lanes: list[LanePath]) -> dict[str, dict[tuple[float, float], float]]:
@@ -80,15 +96,15 @@ def _build_lane_yaw_lookup(lanes: list[LanePath]) -> dict[str, dict[tuple[float,
     return lookup
 
 
-def _load_data(map_path: Path, camera: CameraSpec, signal_types: set[str] | None) -> None:
-    _load_from_xml(map_path.read_text(encoding="utf-8"), camera, signal_types)
+def _load_data(map_path: Path, cameras: list[CameraSpec], signal_types: set[str] | None) -> None:
+    _load_from_xml(map_path.read_text(encoding="utf-8"), cameras, signal_types)
 
 
-def _load_from_xml(xml_string: str, camera: CameraSpec, signal_types: set[str] | None) -> None:
+def _load_from_xml(xml_string: str, cameras: list[CameraSpec], signal_types: set[str] | None) -> None:
     nodes = parse_nodes(xml_string)
     lanes = parse_lanes(xml_string, nodes)
     traffic_lights = parse_traffic_lights(xml_string, nodes)
-    results = run_simulation(lanes, traffic_lights, camera=camera, signal_types=signal_types)
+    results = run_simulation(lanes, traffic_lights, cameras=cameras, signal_types=signal_types)
 
     tl_positions = {tl.id: calc_centroid(tl.bulbs) for tl in traffic_lights if tl.bulbs}
     tl_facing_yaw = {tl.id: tl.facing_yaw for tl in traffic_lights if tl.bulbs}
@@ -135,7 +151,7 @@ def _load_from_xml(xml_string: str, camera: CameraSpec, signal_types: set[str] |
 
     _state.clear()
     _state.update(
-        camera=camera,
+        cameras=list(cameras),
         signal_types=signal_types,
         points=points,
         results_by_point=results_by_point,
@@ -158,18 +174,10 @@ def _serialize_state() -> dict:
     someone else or reload later without the (large, not redistributable)
     source .osm file. `_deserialize_state` is the exact inverse.
     """
-    camera: CameraSpec = _state["camera"]
     signal_types: set[str] | None = _state["signal_types"]
     return {
         "format_version": _SNAPSHOT_FORMAT_VERSION,
-        "camera": {
-            "height": camera.height,
-            "fov_h": camera.fov_h,
-            "fov_v": camera.fov_v,
-            "min_range": camera.min_range,
-            "max_range": camera.max_range,
-            "facing_tolerance_deg": camera.facing_tolerance_deg,
-        },
+        "cameras": [_camera_dict(cam) for cam in _state["cameras"]],
         "signal_types": sorted(signal_types) if signal_types is not None else None,
         "latlon_transform": _state["latlon_transform"],
         "lane_count": _state["lane_count"],
@@ -187,6 +195,7 @@ def _serialize_state() -> dict:
                     "is_covered": r.is_covered,
                     "heads_total": r.heads_total,
                     "heads_visible": r.heads_visible,
+                    "camera_name": r.camera_name,
                 }
                 for r in candidates
             ]
@@ -217,7 +226,7 @@ def _deserialize_state(data: dict) -> None:
             f"unsupported snapshot format_version {data.get('format_version')!r}, expected {_SNAPSHOT_FORMAT_VERSION}"
         )
 
-    camera = CameraSpec(**data["camera"])
+    cameras = [CameraSpec(**cam) for cam in data["cameras"]]
     points = data["points"]
     tl_positions = {tl_id: Point3D(**pos) for tl_id, pos in data["tl_positions"].items()}
     tl_facing_yaw = data["tl_facing_yaw"]
@@ -247,6 +256,7 @@ def _deserialize_state(data: dict) -> None:
                 is_covered=c["is_covered"],
                 heads_total=c["heads_total"],
                 heads_visible=c["heads_visible"],
+                camera_name=c["camera_name"],
             )
             for c in candidates
         ]
@@ -254,7 +264,7 @@ def _deserialize_state(data: dict) -> None:
     signal_types_list = data["signal_types"]
     _state.clear()
     _state.update(
-        camera=camera,
+        cameras=cameras,
         signal_types=set(signal_types_list) if signal_types_list is not None else None,
         points=points,
         results_by_point=results_by_point,
@@ -338,10 +348,10 @@ def load_map():
     notice until this returns.
     """
     xml_string = request.get_data(as_text=True)
-    camera: CameraSpec = _state["camera"]
+    cameras: list[CameraSpec] = _state["cameras"]
     signal_types: set[str] | None = _state["signal_types"]
     try:
-        _load_from_xml(xml_string, camera, signal_types)
+        _load_from_xml(xml_string, cameras, signal_types)
     except ET.ParseError as exc:
         abort(400, description=f"not parseable as OSM XML: {exc}")
     return jsonify({"ok": True, "point_count": len(_state["points"])})
@@ -349,17 +359,9 @@ def load_map():
 
 @app.route("/api/meta")
 def meta():
-    camera: CameraSpec = _state["camera"]
     return jsonify(
         {
-            "camera": {
-                "height": camera.height,
-                "fov_h": camera.fov_h,
-                "fov_v": camera.fov_v,
-                "min_range": camera.min_range,
-                "max_range": camera.max_range,
-                "facing_tolerance_deg": camera.facing_tolerance_deg,
-            },
+            "cameras": [_camera_dict(cam) for cam in _state["cameras"]],
             "lane_count": _state["lane_count"],
             "traffic_light_count": _state["traffic_light_count"],
             "point_count": len(_state["points"]),
@@ -463,9 +465,15 @@ def point_candidates(point_id: int):
         abort(404, description="unknown point id")
 
     p = points_list[point_id]
-    camera: CameraSpec = _state["camera"]
+    cameras: list[CameraSpec] = _state["cameras"]
+    cam_by_name = {cam.name: cam for cam in cameras}
+    ref_cam = cameras[0]
     cam_yaw = _state["yaw_lookup"][p["lane_id"]][(p["x"], p["y"])]
-    cam_pos = Point3D(p["x"], p["y"], p["z"] + camera.height)
+    # All drawing projections use one shared frame -- the vehicle-heading
+    # angle space at the first camera's height -- so every camera's FOV
+    # rectangle and every light plot into the same panel. Per-camera
+    # *visibility* checks below use each camera's own height/axis/FOV.
+    cam_pos = Point3D(p["x"], p["y"], p["z"] + ref_cam.height)
 
     point_results = _state["results_by_point"][point_id]
     group_covered = {r.group_id for r in point_results if r.is_covered}
@@ -476,6 +484,8 @@ def point_candidates(point_id: int):
     tl_facing_yaw = _state["tl_facing_yaw"]
     candidates = []
     for r in point_results:
+        cam = cam_by_name.get(r.camera_name, ref_cam)
+        r_cam_pos = Point3D(p["x"], p["y"], p["z"] + cam.height)
         target_pos = _state["tl_positions"][r.target_tl_id]
         yaw_diff, pitch_diff = calc_camera_frame_offset(cam_pos, cam_yaw, 0.0, target_pos)
         panel_width, panel_height = tl_panel_size.get(r.target_tl_id) or (None, None)
@@ -491,23 +501,22 @@ def point_candidates(point_id: int):
                 {"yaw_diff": lamp_yaw, "pitch_diff": lamp_pitch, "color": lamp["color"], "arrow": lamp["arrow"]}
             )
 
-        # per-head projection + the same visibility check the simulator
-        # ran (identical geometry functions and inputs), so the frame view
-        # can draw each physical housing at its own position with its own
-        # visible/not-visible state instead of one box at the pooled
-        # centroid -- which can sit between housings, where nothing exists
+        # per-head projection (shared frame) + the same visibility check
+        # the simulator ran for THIS result's camera (identical geometry
+        # functions and inputs), so the frame view can draw each physical
+        # housing at its own position with its own per-camera state
         facing_yaw = tl_facing_yaw.get(r.target_tl_id)
         heads = []
         for h in tl_heads.get(r.target_tl_id, []):
             head_pos = Point3D(h["x"], h["y"], h["z"])
             head_yaw, head_pitch = calc_camera_frame_offset(cam_pos, cam_yaw, 0.0, head_pos)
             head_in_fov = check_fov_inclusion(
-                cam_pos=cam_pos, cam_yaw=cam_yaw, cam_pitch=0.0, target_pos=head_pos,
-                fov_h=camera.fov_h, fov_v=camera.fov_v,
+                cam_pos=r_cam_pos, cam_yaw=cam_yaw + cam.yaw_offset, cam_pitch=cam.pitch_offset,
+                target_pos=head_pos, fov_h=cam.fov_h, fov_v=cam.fov_v,
             )
             head_facing = True if facing_yaw is None else check_light_facing_camera(
-                tl_pos=head_pos, tl_facing_yaw=facing_yaw, cam_pos=cam_pos,
-                max_angle_diff=camera.facing_tolerance_deg,
+                tl_pos=head_pos, tl_facing_yaw=facing_yaw, cam_pos=r_cam_pos,
+                max_angle_diff=cam.facing_tolerance_deg,
             )
             heads.append(
                 {
@@ -522,6 +531,7 @@ def point_candidates(point_id: int):
         candidates.append(
             {
                 "target_tl_id": r.target_tl_id,
+                "camera_name": r.camera_name,
                 "signal_type": r.signal_type,
                 "group_id": r.group_id,
                 "group_covered": r.group_id in group_covered,
@@ -533,8 +543,8 @@ def point_candidates(point_id: int):
                 "heads_visible": r.heads_visible,
                 "yaw_diff": yaw_diff,
                 "pitch_diff": pitch_diff,
-                "norm_x": yaw_diff / (camera.fov_h / 2.0),
-                "norm_y": pitch_diff / (camera.fov_v / 2.0),
+                "norm_x": yaw_diff / (ref_cam.fov_h / 2.0),
+                "norm_y": pitch_diff / (ref_cam.fov_v / 2.0),
                 "panel_width": panel_width,
                 "panel_height": panel_height,
                 "lamps": lamps,
@@ -548,8 +558,8 @@ def point_candidates(point_id: int):
             "status": compute_point_status(point_results),
             "cam_pos": {"x": cam_pos.x, "y": cam_pos.y, "z": cam_pos.z},
             "cam_yaw": cam_yaw,
-            "fov_h": camera.fov_h,
-            "fov_v": camera.fov_v,
+            "fov_h": ref_cam.fov_h,
+            "fov_v": ref_cam.fov_v,
             "candidates": candidates,
         }
     )
@@ -589,7 +599,10 @@ def main() -> None:
             "max_range": args.max_range,
             "facing_tolerance_deg": args.facing_tolerance,
         }
-        camera = replace(config.camera, **{k: v for k, v in camera_overrides.items() if v is not None})
+        active_overrides = {k: v for k, v in camera_overrides.items() if v is not None}
+        if active_overrides and len(config.cameras) > 1:
+            parser.error("per-camera CLI flags don't apply to a multi-camera `cameras:` config -- edit the YAML instead")
+        cameras = [replace(config.camera, **active_overrides)] if len(config.cameras) == 1 else list(config.cameras)
 
         signal_type = args.signal_type or config.signal_type
         signal_types = None if signal_type == "both" else {signal_type}
@@ -602,7 +615,7 @@ def main() -> None:
             )
 
         print(f"Loading {map_path} ...")
-        _load_data(map_path, camera, signal_types)
+        _load_data(map_path, cameras, signal_types)
 
     if args.save:
         _write_snapshot(args.save, _serialize_state())
