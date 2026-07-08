@@ -415,6 +415,51 @@ def test_run_simulation_multi_camera_sums_into_redundancy():
     assert compute_point_min_visible(at_60) == 2  # camera redundancy counted
 
 
+def test_fallback_excludes_owned_signal_serving_a_different_approach():
+    # The candidate signal is owned (direct_tl_ids) by a lanelet whose
+    # approach direction is 40deg off ours. Our own lane has no
+    # authoritative set (no direct refs, no successors), so the candidate
+    # reaches the fallback -- where the owner-approach test must reject
+    # it, even though its facing_yaw (144deg off our heading) passes the
+    # old 120deg facing test.
+    import math
+    owner = LanePath(
+        id="side-approach",
+        center_line=[Point3D(100.0 - 30 * math.cos(math.radians(40)), -30 * math.sin(math.radians(40)), 0.0), Point3D(100.0, 0.0, 0.0)],
+        direct_tl_ids=["skewed-light"],
+        next_lane_ids=[],
+    )
+    light = TrafficLight(
+        id="skewed-light", bulbs=[Point3D(100.0, 0.0, 5.0)], signal_type="vehicle", facing_yaw=-144.0
+    )
+    results = run_simulation([STRAIGHT_LANE, owner], [light])
+    ours = [r for r in results if r.lane_id == "lane-1"]
+    assert ours == []  # excluded as a candidate entirely, not just uncovered
+
+
+def test_fallback_keeps_owned_signal_serving_our_approach_direction():
+    # owner lanelet runs the same direction as our lane (0 deg) -> kept
+    owner = LanePath(
+        id="parallel-approach",
+        center_line=[Point3D(70.0, 5.0, 0.0), Point3D(100.0, 5.0, 0.0)],
+        direct_tl_ids=["own-light"],
+        next_lane_ids=[],
+    )
+    light = TrafficLight(id="own-light", bulbs=[Point3D(100.0, 0.0, 5.0)], signal_type="vehicle", facing_yaw=180.0)
+    results = run_simulation([STRAIGHT_LANE, owner], [light])
+    ours = [r for r in results if r.lane_id == "lane-1"]
+    assert ours
+    assert any(r.is_covered for r in ours)
+
+
+def test_fallback_unowned_signal_still_uses_facing_test():
+    # no lanelet anywhere claims this light -> the old 120deg facing test
+    # is still what decides (facing_yaw=-144 passes it)
+    light = TrafficLight(id="unowned", bulbs=[Point3D(100.0, 0.0, 5.0)], signal_type="vehicle", facing_yaw=-144.0)
+    results = run_simulation([STRAIGHT_LANE], [light])
+    assert [r for r in results if r.lane_id == "lane-1"]
+
+
 def test_run_simulation_yaw_offset_rotates_the_fov():
     # light dead ahead; a camera mounted 90deg to the left can't see it,
     # even though it's in range

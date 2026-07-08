@@ -229,13 +229,21 @@ possible, not by geometry, tried in order by `_build_lane_relevant_tl_ids`
    situation at complex intersections) rather than guess wrong.
 
 Together these recover an authoritative answer for the large majority of
-lanelets on the bundled map. Only when none of the three applies does it
-fall back to a geometric heuristic (facing_yaw vs. lane heading), which a
-skewed (non-square) intersection -- or, per `docs/behavior.md`, a handful
-of very close stop lines at once -- can fool: a cross-street signal can
-end up "more than `LANE_DIRECTION_THRESHOLD_DEG` (120) degrees" off a
-lane's heading by coincidence and get treated as relevant when it has
-nothing to do with that lane:
+lanelets on the bundled map. When none of the three applies, the fallback
+itself has two levels: if the *candidate signal's* owners are known
+(some lanelet somewhere lists it in `direct_tl_ids` -- true for 696/699
+vehicle signals here), the lane must be traveling in the approach
+direction those owning lanelets serve (their START headings, within
+`OWNER_APPROACH_THRESHOLD_DEG` = 12) -- the same authoritative ownership
+data as level 1, just used in the inverse direction, so it works even
+when the lane's own successor graph dead-ends. Only an entirely unowned
+signal falls through to the last-resort geometric heuristic (facing_yaw
+vs. lane heading), which a skewed (non-square) intersection -- or, per
+`docs/behavior.md`, a handful of very close stop lines at once -- can
+fool: a cross-street signal can end up "more than
+`LANE_DIRECTION_THRESHOLD_DEG` (120) degrees" off a lane's heading by
+coincidence and get treated as relevant when it has nothing to do with
+that lane:
 
 ```
 Plan view: a light only belongs to the direction it faces (fallback only --

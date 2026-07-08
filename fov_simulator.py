@@ -49,10 +49,40 @@ LANE_DIRECTION_THRESHOLD_DEG = 120.0
 AHEAD_THRESHOLD_DEG = 90.0
 MAX_INHERITANCE_HOPS = 15
 STOP_LINE_PROXIMITY_M = 30.0
+OWNER_APPROACH_THRESHOLD_DEG = 12.0
 
 
 def _polyline_length(points: list[Point3D]) -> float:
     return sum(calc_distance_3d(a, b) for a, b in zip(points, points[1:]))
+
+
+def _angle_diff_deg(a: float, b: float) -> float:
+    d = (a - b) % 360.0
+    return d - 360.0 if d > 180.0 else d
+
+
+def _build_tl_owner_headings(lanes: list[LanePath]) -> dict[str, list[float]]:
+    """signal id -> approach directions of the lanelets that directly claim
+    it (`direct_tl_ids`), measured as each owning lanelet's START heading.
+
+    Start, not end: a turn lanelet at an intersection curves away toward
+    the cross street by its end, but *starts* aligned with its approach --
+    on the bundled map, multiple owners of one signal diverge by up to
+    ~180 degrees in end heading but agree to a median 0.2 degrees in
+    start heading. This is the inverse view of the same authoritative
+    ownership data the primary filter uses: instead of "which signals may
+    my lane use" (which needs graph connectivity that sometimes dead-ends
+    mid-block), it answers "which approach direction does this signal
+    serve" -- usable by any lane regardless of graph gaps.
+    """
+    headings: dict[str, list[float]] = {}
+    for lane in lanes:
+        if not lane.direct_tl_ids or len(lane.center_line) < 2:
+            continue
+        heading = calc_heading_yaw(lane.center_line[0], lane.center_line[1])
+        for tl_id in lane.direct_tl_ids:
+            headings.setdefault(tl_id, []).append(heading)
+    return headings
 
 
 def _nearby_group_by_lane_end(
@@ -256,6 +286,7 @@ def run_simulation(
     # the successor-walk range bound must reach as far as the longest-range
     # camera of the rig can see
     lane_relevant_tl_ids = _build_lane_relevant_tl_ids(lanes, traffic_lights, max(c.max_range for c in rig))
+    tl_owner_headings = _build_tl_owner_headings(lanes)
 
     results: list[ValidationResult] = []
 
@@ -297,6 +328,20 @@ def run_simulation(
 
                 if signal_type == "vehicle" and lane_tl_ids is not None:
                     if tl_id not in lane_tl_ids:
+                        continue
+                elif signal_type == "vehicle" and tl_id in tl_owner_headings:
+                    # Fallback for a lane with no authoritative set of its
+                    # own, but the *candidate signal's* owners are known:
+                    # keep it only when this lane travels in (roughly) the
+                    # approach direction those owners serve. Far sharper
+                    # than the 120-deg facing test below, which only
+                    # rejects opposite-direction signals and lets a
+                    # skewed side-approach signal (e.g. facing 144 deg off
+                    # this lane's heading) through as a false candidate.
+                    if all(
+                        abs(_angle_diff_deg(h, heading)) > OWNER_APPROACH_THRESHOLD_DEG
+                        for h in tl_owner_headings[tl_id]
+                    ):
                         continue
                 elif facing_yaw is not None and not check_light_relevant_to_lane(
                     tl_facing_yaw=facing_yaw,

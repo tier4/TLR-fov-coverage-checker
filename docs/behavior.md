@@ -821,3 +821,50 @@ Verified on the bundled map with tele (30x17deg, 20-250m) + wide
 exactly (76.2% -- consistency check), wide alone covers 88.7% of its
 shorter-range candidate set, combined coverage 79.4%, and redundancy 3+
 rises from 34.0% to 45.8%. Snapshot format v10.
+
+## A fourth false-red point, and the owner-approach filter
+
+Reported via shareable link (lane 2224706): four genuinely relevant
+signals all covered at 141-154m, yet the point read red because signal
+2305534 (122.8m, 24 degrees off-axis) was also a candidate and its
+group had no visible member. Diagnosis showed all three selection
+layers passing it through:
+
+1. The lane's successor chain dead-ends after just 16.5m (2224706 ->
+   2224700 -> 2224704, no `next_lane_ids`) -- another mid-block lanelet
+   graph gap, so no authoritative set is inherited from lanelet 2224685
+   (which owns the correct signals, ~140m ahead).
+2. The stop-line proximity fallback (30m) correctly declines: both stop
+   lines are 116-125m from the lane's end. Notably the WRONG signal's
+   stop line (116m) is closer than the right one's (125m) -- distance
+   alone couldn't have separated them anyway.
+3. The 120-degree facing test passes both: correct signal 179.5 degrees
+   off our heading, wrong one 144.4 -- the test only rejects
+   opposite-direction signals, and a ~35-degree-skewed side-approach
+   signal sails through. Same weakness as the lane-2293233 case, at a
+   different edge.
+
+**Fix: use signal ownership in the inverse direction.** 696 of 699
+vehicle signals are listed in some lanelet's `direct_tl_ids` -- so even
+when *our* lane's graph dead-ends, the *candidate's* owners are known.
+`_build_tl_owner_headings` records each owning lanelet's START heading
+(start, not end: a turn lanelet curves away by its end -- multi-owner
+end-heading spread is up to ~180 degrees, start-heading spread median
+0.2 degrees). In the fallback path, an owned vehicle signal is kept only
+if our lane's heading is within `OWNER_APPROACH_THRESHOLD_DEG` (12) of
+some owner's approach direction. Validated on both known cases before
+implementing: correct signals sit 3.4 / 0.3 degrees off, wrong ones
+18.6 / 58.3. Unowned signals (and pedestrian) still use the facing
+test.
+
+Measured: the reported point flips to covered (its 4 real signals, the
+skewed one excluded entirely); whole-map vehicle coverage 76.2% ->
+79.0%. Evaluated-point count drops ~4% (90,710 -> 87,030): points whose
+only candidates were irrelevant side-approach signals now have none,
+and per the existing semantics ("irrelevant candidates are skipped, not
+counted as blind spots") they leave the evaluated set instead of
+showing as false reds. The honest caveat: on a strongly curved
+approach, a lane's heading far upstream can legitimately differ from
+the owner's start heading by more than 12 degrees, which would drop a
+true candidate early on the curve -- the threshold is a named constant
+(`OWNER_APPROACH_THRESHOLD_DEG`) for exactly that retuning.
