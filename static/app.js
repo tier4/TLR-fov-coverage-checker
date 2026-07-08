@@ -61,6 +61,7 @@ const patternFilterInput = document.getElementById("pattern-filter");
 const patternSummaryEl = document.getElementById("pattern-summary");
 const patternTbody = document.querySelector("#pattern-table tbody");
 const colorModeSelect = document.getElementById("color-mode");
+const mapTooltipEl = document.getElementById("map-tooltip");
 
 let points = [];
 let trafficLights = [];
@@ -474,6 +475,54 @@ function drawMapOverlays(ctx, dotSize) {
   }
 }
 
+// ---- hover tooltip over the selected point's candidate lights ----
+// An HTML overlay, deliberately not canvas-drawn callouts: no layout /
+// collision handling in the render loop, styling lives in CSS, and the
+// content comes from one pure builder below.
+
+function buildLightTooltipHtml(tlId) {
+  // one row per camera, from the already-fetched candidate detail
+  const rows = currentDetail.candidates.filter((c) => c.target_tl_id === tlId);
+  if (!rows.length) return null;
+  const lines = rows.map((c) => {
+    const state = c.is_covered ? "" : ` <span class="tt-uncovered">(${c.in_fov ? "facing away" : "not visible"})</span>`;
+    return `<div><span class="tt-cam">${c.camera_name}</span>${c.heads_visible}/${c.heads_total} heads${state}</div>`;
+  });
+  const total = rows.reduce((n, c) => n + c.heads_visible, 0);
+  const totalLine = rows.length > 1 ? `<div><span class="tt-cam">total</span>${total} observation(s)</div>` : "";
+  return `<div class="tt-title">light ${tlId} &mdash; ${rows[0].distance_m.toFixed(1)} m</div>${lines.join("")}${totalLine}`;
+}
+
+function findHoveredCandidateLight(sx, sy) {
+  if (!currentDetail || !highlightedLights.size) return null;
+  const hitR = Math.max(3, Math.min(9, view.scale * 3)) * 1.8 + 6; // highlight marker radius + slack
+  let best = null, bestD = hitR * hitR;
+  for (const tl of trafficLights) {
+    if (!highlightedLights.has(tl.id)) continue;
+    const [tx, ty] = worldToScreen(tl.x, tl.y);
+    const d = (tx - sx) ** 2 + (ty - sy) ** 2;
+    if (d <= bestD) { bestD = d; best = tl.id; }
+  }
+  return best;
+}
+
+function showMapTooltip(cssX, cssY, html) {
+  mapTooltipEl.innerHTML = html;
+  mapTooltipEl.hidden = false;
+  const paneRect = mapTooltipEl.parentElement.getBoundingClientRect();
+  const ttRect = mapTooltipEl.getBoundingClientRect();
+  // flip to the left/top of the cursor when the default placement would
+  // run off the pane
+  const x = cssX + 16 + ttRect.width > paneRect.width ? cssX - ttRect.width - 12 : cssX + 16;
+  const y = cssY + 16 + ttRect.height > paneRect.height ? cssY - ttRect.height - 12 : cssY + 16;
+  mapTooltipEl.style.left = `${x}px`;
+  mapTooltipEl.style.top = `${y}px`;
+}
+
+function hideMapTooltip() {
+  mapTooltipEl.hidden = true;
+}
+
 function findNearestPoint(worldX, worldY) {
   let best = null, bestDist = Infinity;
   for (const p of points) {
@@ -519,6 +568,7 @@ function findPointFromUrl() {
 async function selectPoint(pointId) {
   selectedPointId = pointId;
   currentDetail = null;
+  hideMapTooltip();
   highlightedLights = new Map();
   frameView.zoom = 1;
   frameView.panX = 0;
@@ -623,6 +673,10 @@ function renderFrame(detail) {
 
   const w = frameCanvas.width, h = frameCanvas.height;
   const cx = w / 2 + frameView.panX, cy = h / 2 + frameView.panY;
+  // canvas pixels are device pixels (resizeCanvases multiplies by
+  // devicePixelRatio), so font sizes must be scaled back up to stay at
+  // the intended CSS size on high-DPI displays
+  const labelFont = `${Math.round(15 * devicePixelRatio)}px sans-serif`;
 
   // The shared frame is the *vehicle-heading* angle space: every camera's
   // FOV rectangle sits at its own mounting offset (center = yaw_offset/
@@ -657,8 +711,8 @@ function renderFrame(detail) {
   ctx.moveTo(0, cy); ctx.lineTo(w, cy);
   ctx.stroke();
   ctx.fillStyle = "#6a8ab8";
-  ctx.font = "10px sans-serif";
-  ctx.fillText("horizon (pitch 0)", 6, cy - 4);
+  ctx.font = labelFont;
+  ctx.fillText("horizon (pitch 0)", 6, cy - 5);
 
   // one FOV rectangle per camera, centered at its mounting offsets
   let leftEdgeX = Infinity, rightEdgeX = -Infinity;
@@ -673,8 +727,8 @@ function renderFrame(detail) {
     ctx.strokeRect(rx0, ry0, rx1 - rx0, ry1 - ry0);
     ctx.setLineDash([]);
     ctx.fillStyle = color;
-    ctx.font = "10px sans-serif";
-    ctx.fillText(cam.name, rx0 + 4, ry0 + 12);
+    ctx.font = labelFont;
+    ctx.fillText(cam.name, rx0 + 5, ry0 + 17 * devicePixelRatio);
   });
 
   // crosshair at dead ahead (vehicle heading), not any camera's axis
@@ -686,10 +740,10 @@ function renderFrame(detail) {
   ctx.stroke();
 
   ctx.fillStyle = "#aaa";
-  ctx.font = "10px sans-serif";
+  ctx.font = labelFont;
   // orientation labels so left/right is never ambiguous
-  ctx.fillText("L", leftEdgeX + 4, cy - 6);
-  ctx.fillText("R", rightEdgeX - 12, cy - 6);
+  ctx.fillText("L", leftEdgeX + 5, cy - 7);
+  ctx.fillText("R", rightEdgeX - 16, cy - 7);
 
   // One drawing entry per light: its per-camera candidate rows merge, a
   // head drawing solid if ANY camera sees it, and the label totalling
@@ -772,7 +826,7 @@ function renderFrame(detail) {
     }
 
     ctx.fillStyle = "white";
-    ctx.font = "10px sans-serif";
+    ctx.font = labelFont;
     // multi-camera: total observations across the rig; single camera:
     // the familiar k/n heads
     const headsNote = metaCameras.length > 1
@@ -852,6 +906,21 @@ function setupMapInteraction() {
     const nearest = findNearestPoint(wx, wy);
     if (nearest) selectPoint(nearest.id);
   });
+
+  // hover callout: distance + per-camera detections for the selected
+  // point's candidate lights
+  mapCanvas.addEventListener("mousemove", (e) => {
+    if (dragging || !currentDetail) { hideMapTooltip(); return; }
+    const rect = mapCanvas.getBoundingClientRect();
+    const sx = (e.clientX - rect.left) * devicePixelRatio;
+    const sy = (e.clientY - rect.top) * devicePixelRatio;
+    const hit = findHoveredCandidateLight(sx, sy);
+    const html = hit && buildLightTooltipHtml(hit);
+    if (!html) { hideMapTooltip(); return; }
+    const paneRect = mapCanvas.parentElement.getBoundingClientRect();
+    showMapTooltip(e.clientX - paneRect.left, e.clientY - paneRect.top, html);
+  });
+  mapCanvas.addEventListener("mouseleave", hideMapTooltip);
 }
 
 function setupFrameInteraction() {

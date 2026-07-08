@@ -25,8 +25,8 @@ cameras:
     facing_tolerance_deg: 45.0
   - name: front_wide
     height: 3.0
-    fov_h: 90.0
-    fov_v: 50.0
+    fov_h: 60.0
+    fov_v: 34.0
     min_range: 3.0
     max_range: 80.0
     facing_tolerance_deg: 45.0

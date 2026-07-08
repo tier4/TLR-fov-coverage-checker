@@ -121,9 +121,15 @@ so a locally-rotated coordinate frame still lines up with the photo.
 Disabled automatically when the map has no lat/lon data.
 
 The camera-view panel renders through the windshield: L is the vehicle's
-left, the dashed FOV rectangle keeps its true `fov_h x fov_v` aspect
-ratio, and the blue line is the horizon (the camera is modeled level,
-pitch 0). Each candidate light is drawn as a translucent box at its
+left, each camera's dashed FOV rectangle keeps its true `fov_h x fov_v`
+aspect ratio, and the blue line is the horizon. It is the pane's main
+event and sized accordingly (over half the viewport height).
+
+Hovering a candidate light on the map (while a point is selected) pops a
+callout with that light's distance and each camera's detected-head count
+-- an HTML tooltip rather than canvas-drawn callouts, so it needs no
+layout/collision handling in the render loop and its content comes from
+one small builder function (`buildLightTooltipHtml`). Each candidate light is drawn as a translucent box at its
 apparent angular size at that distance, using the light's real housing
 dimensions from the map itself (the `refers` panel way spans the
 housing's width; its `height` tag gives the vertical size -- every
